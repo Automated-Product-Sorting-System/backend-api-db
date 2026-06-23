@@ -1,0 +1,25 @@
+# Git metadata
+.git
+.gitignore
+
+# Docker configuration
+Dockerfile
+docker-compose.yaml
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Secrets and Environment Variables
+.env
+
+# Backups and Documentation
+database_backups/
+README.md

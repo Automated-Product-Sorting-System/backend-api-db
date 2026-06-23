@@ -1,0 +1,14 @@
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+confirmed_dataset/
+pg_data/
+influx_data/
+
