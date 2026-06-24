@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from typing import Optional
 from passlib.context import CryptContext
 import threading
 import uvicorn
+import asyncio
 
 # Internal imports
 from core.utils import move_to_confirmed_dataset, delete_inspection_image
@@ -419,6 +420,27 @@ def get_telemetry(current_session: models.SystemSession = Depends(get_current_se
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch telemetry: {str(e)}")
 
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(websocket: WebSocket):
+    """
+    Live WebSocket stream for the Dashboard.
+    Pushes the latest sensor data from InfluxDB every second.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            # Fetch latest telemetry data in a separate thread
+            data = await asyncio.to_thread(get_latest_telemetry)
+            if data:
+                await websocket.send_json({"status": "success", "data": data})
+            
+            # Update every second
+            await asyncio.sleep(1.0)  
+    except WebSocketDisconnect:
+        print("Dashboard client disconnected from live telemetry")
+    except Exception as e:
+        print(f"WebSocket connection dropped: {e}")
+
 # ==========================================
 # General Data Retrieval (GET) Endpoints
 # ==========================================
@@ -533,7 +555,6 @@ def update_sensor_status(sensor_id: str, is_active: bool, current_session: model
     sensor.is_active = is_active
     db.commit()
     return {"message": f"Sensor {sensor_id} status updated to {'Active' if is_active else 'Inactive'}"}
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

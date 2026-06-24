@@ -7,3 +7,4 @@ paho-mqtt>=2.0.0
 python-dotenv>=1.0.0
 influxdb-client>=1.36.0
 passlib[bcrypt]>=1.7.4
+websockets>=12.0

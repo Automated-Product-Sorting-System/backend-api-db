@@ -5,6 +5,7 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from dotenv import load_dotenv
+import ssl
 from influxdb_client import Point
 
 # Internal imports
@@ -19,8 +20,10 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+MQTT_USERNAME = os.getenv("MQTT_USERNAME")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
 MQTT_BROKER = os.getenv("MQTT_BROKER")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC")
 
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -74,6 +77,13 @@ def main():
     client = mqtt.Client(callback_api_version=CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
     client.on_message = on_message
+    
+    if MQTT_USERNAME and MQTT_PASSWORD:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    
+    # Enable TLS for port 8883 (HiveMQ Cloud)
+    if MQTT_PORT == 8883:
+        client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
 
     try:
         logger.info(f"Initializing connection to MQTT Broker...")
