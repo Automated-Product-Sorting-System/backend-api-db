@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from uuid import UUID
 from typing import Optional
 from passlib.context import CryptContext
+import paho.mqtt.publish as publish
+import json
+import os
 import threading
 import uvicorn
 import asyncio
@@ -306,6 +309,49 @@ def get_all_sessions(
     sessions = db.query(models.SystemSession).all()
     return sessions
 
+# ==============================================
+# Machine Control Endpoint (START/STOP/RESET)
+# ==============================================
+
+class MachineCommand(BaseModel):
+    command: str 
+
+@app.post("/machine/control")
+def control_machine(
+    request: MachineCommand,
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    # Check if the user is an Admin or Operator
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    if not current_user or current_user.user_role.value == "Viewer":
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to control the machine.")
+
+    # Get MQTT connection details from .env
+    broker = os.getenv("MQTT_BROKER")
+    port = int(os.getenv("MQTT_PORT", 8883))
+    username = os.getenv("MQTT_USERNAME")
+    password = os.getenv("MQTT_PASSWORD")
+    
+    # Prepare authentication and TLS settings
+    auth_dict = {'username': username, 'password': password} if username and password else None
+    tls_dict = {'ca_certs': None} if port == 8883 else None
+
+    # Send command to PLC via MQTT
+    try:
+        # Sending only one message then close connection
+        publish.single(
+            topic="factory/plc/commands",  # Topic for PLC commands
+            payload=json.dumps({"action": request.command}),
+            hostname=broker,
+            port=port,
+            auth=auth_dict,
+            tls=tls_dict
+        )
+        return {"status": "success", "message": f"Command '{request.command}' sent to PLC."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with PLC: {str(e)}")
+
 # ==========================================
 # Inspection (Computer Vision) Endpoints
 # ==========================================
@@ -421,23 +467,38 @@ def get_telemetry(current_session: models.SystemSession = Depends(get_current_se
         raise HTTPException(status_code=500, detail=f"Failed to fetch telemetry: {str(e)}")
 
 @app.websocket("/ws/telemetry")
-async def websocket_telemetry(websocket: WebSocket):
+async def websocket_telemetry(
+    websocket: WebSocket,
+    session_id: UUID = Query(..., description="The Session ID obtained from login"),
+    db: Session = Depends(get_db)
+):
     """
-    Live WebSocket stream for the Dashboard.
-    Pushes the latest sensor data from InfluxDB every second.
+    Live WebSocket stream, secured by Session ID via Query Parameter.
     """
+    # Check if the session is valid before accepting the connection
+    session = db.query(models.SystemSession).filter(
+        models.SystemSession.session_id == session_id,
+        models.SystemSession.expires_at > datetime.now()
+    ).first()
+    
+    if not session:
+        # If the session is invalid, reject the connection immediately with a policy violation code
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # If the session is valid, accept the connection
     await websocket.accept()
+    print(f"User {session.user_id} connected to live telemetry.")
+    
     try:
         while True:
-            # Fetch latest telemetry data in a separate thread
             data = await asyncio.to_thread(get_latest_telemetry)
             if data:
                 await websocket.send_json({"status": "success", "data": data})
             
-            # Update every second
             await asyncio.sleep(1.0)  
     except WebSocketDisconnect:
-        print("Dashboard client disconnected from live telemetry")
+        print(f"User {session.user_id} disconnected from live telemetry.")
     except Exception as e:
         print(f"WebSocket connection dropped: {e}")
 
@@ -557,4 +618,4 @@ def update_sensor_status(sensor_id: str, is_active: bool, current_session: model
     return {"message": f"Sensor {sensor_id} status updated to {'Active' if is_active else 'Inactive'}"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
