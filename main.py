@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +13,8 @@ import os
 import threading
 import uvicorn
 import asyncio
+import uuid
+import shutil
 
 # Internal imports
 from core.utils import move_to_confirmed_dataset, delete_inspection_image
@@ -362,18 +364,35 @@ class InspectionConfirmRequest(BaseModel):
 
 @app.post("/inspections", response_model=schemas.InspectionResponse)
 def create_automated_inspection(
-    inspection: schemas.InspectionCreate,
+    sensor_id: str = Form(...),
+    status: str = Form(...),
+    defect_type: str = Form(None),
+    image_file: UploadFile = File(None), # Receive the actual image file
     db: Session = Depends(get_db)
 ):
     """
-    Endpoint for the Computer Vision / AI Model to submit new inspection results.
+    Endpoint for the Computer Vision / AI Model to submit new inspection results along with the physical image.
     """
+    temp_image_path = None
+    
+    # Check if an image file is provided
+    if image_file:
+        # Generate a unique filename to avoid conflicts
+        file_extension = image_file.filename.split('.')[-1]
+        temp_filename = f"temp_{uuid.uuid4()}.{file_extension}"
+        temp_image_path = f"./{temp_filename}"
+        
+        # Save the file temporarily on the server
+        with open(temp_image_path, "wb") as buffer:
+            shutil.copyfileobj(image_file.file, buffer)
+
+    # Create the inspection record in the database
     new_inspection = models.Inspection(
-        user_id=None,  # No human user involved yet
-        sensor_id=inspection.sensor_id,
-        status=inspection.status,
-        defect_type=inspection.defect_type,
-        cv_image_url=inspection.cv_image_url
+        user_id=None,
+        sensor_id=sensor_id,
+        status=status,
+        defect_type=defect_type,
+        cv_image_url=temp_image_path  # Save the temporary path on the server
     )
     
     db.add(new_inspection)
