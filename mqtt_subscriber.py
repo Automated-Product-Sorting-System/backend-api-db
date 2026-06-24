@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from dotenv import load_dotenv
 import ssl
-from influxdb_client import Point
+from influxdb_client.client.write.point import Point
 
 # Internal imports
 from databases.influx_conn import write_api, INFLUXDB_BUCKET, INFLUXDB_ORG
@@ -22,9 +22,12 @@ load_dotenv()
 
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
-MQTT_BROKER = os.getenv("MQTT_BROKER")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
-MQTT_TOPIC = os.getenv("MQTT_TOPIC")
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "")
+
+if not MQTT_BROKER or not MQTT_TOPIC:
+    raise ValueError("MQTT_BROKER or MQTT_TOPIC is missing in the .env file!")
 
 def on_connect(client, userdata, flags, rc, properties=None):
     """
@@ -43,7 +46,7 @@ def on_message(client, userdata, msg):
     Handles data transformation and writes directly to InfluxDB.
     """
     try:
-        # Expected payload format: {"sensor_id": "SN-001", "temperature": 24.5, "pressure": 1.2}
+        # Expected payload format: {"sensor_id": "SN-001", "temperature": 24.5, ...}
         payload = json.loads(msg.payload.decode("utf-8"))
         sensor_id = payload.get("sensor_id")
         
@@ -51,24 +54,28 @@ def on_message(client, userdata, msg):
             logger.warning("Received payload missing 'sensor_id' field. Skipping write.")
             return
 
-        # Iterate through fields dynamically to construct the Time-Series Point
+        # Create the Point outside the loop, passing sensor_id as a tag
+        point = Point("SensorData").tag("sensor_id", sensor_id)
+        
+        has_fields = False
+        
+        #  Iterate through fields and add them to the same Point to ensure exact same Timestamp
         for field, value in payload.items():
             if field == "sensor_id":
                 continue
             
-            # Construct InfluxDB Point aligned with your influx_conn.py mapping
-            point = Point("SensorData") \
-                .tag("sensor_id", sensor_id) \
-                .field(field, float(value)) \
-                .time(datetime.utcnow())
+            point.field(field, float(value))
+            has_fields = True
             
-            # Synchronous write to the specified bucket
+        # Execute the database write operation once to minimize resource consumption
+        if has_fields:
             write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-            
-        logger.info(f"Telemetry metrics processed and persisted for sensor: {sensor_id}")
+            logger.info(f"Telemetry metrics processed and persisted for sensor: {sensor_id}")
 
     except json.JSONDecodeError:
         logger.error("Failed to decode incoming MQTT message payload. Ensure payload is valid JSON.")
+    except ValueError as ve:
+        logger.error(f"Data type error (e.g., cannot convert value to float): {str(ve)}")
     except Exception as e:
         logger.error(f"Error during InfluxDB ingestion pipeline: {str(e)}")
 
