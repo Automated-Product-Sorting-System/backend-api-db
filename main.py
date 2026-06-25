@@ -138,10 +138,17 @@ def create_user(request: schemas.UserCreate, db: Session = Depends(get_db)):
     # Hash the password before saving it to the database
     hashed_password = get_password_hash(request.password)
     
+    users_count = db.query(models.User).count()
+    
+    if users_count == 0:
+        assigned_role = schemas.UserRole.Admin  # First user is always an admin
+    else:
+        assigned_role = schemas.UserRole.Viewer  # Subsequent users are viewers
+    
     new_user = models.User(
         username=request.username,
         password_hash=hashed_password,  # Store the hashed password
-        user_role=request.user_role
+        user_role=assigned_role
     )
     db.add(new_user)
     db.commit()
