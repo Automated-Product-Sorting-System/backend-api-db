@@ -168,6 +168,52 @@ def logout(
     return {"message": "Logged out successfully"}
 
 # ==========================================
+# Admin-Specific User Creation Endpoint
+# ==========================================
+
+class AdminCreateUserRequest(BaseModel):
+    username: str
+    password: str
+    user_role: schemas.UserRole  # Admin, Operator, or Viewer
+
+@app.post("/admin/create-user")
+def admin_create_user(
+    request: AdminCreateUserRequest, 
+    current_session: models.SystemSession = Depends(get_current_session), 
+    db: Session = Depends(get_db)
+):
+    # Verify only admins can create users
+    current_admin = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    
+    if not current_admin or current_admin.user_role != schemas.UserRole.Admin:
+        raise HTTPException(status_code=403, detail="Only Admin can create users with specific roles")
+
+    # Check if the username is already taken
+    existing_user = db.query(models.User).filter(models.User.username == request.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Hash the password before saving it to the database
+    hashed_password = get_password_hash(request.password)
+    
+    # Create the new user with the specified role
+    new_user = models.User(
+        username=request.username,
+        password_hash=hashed_password,
+        user_role=request.user_role
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {
+        "message": f"User '{request.username}' created successfully as {request.user_role.value}", 
+        "user_id": new_user.user_id,
+        "assigned_role": request.user_role.value
+    }
+
+# ==========================================
 # User Edit Endpoints
 # ==========================================
 
