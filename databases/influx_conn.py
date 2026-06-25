@@ -40,7 +40,7 @@ def get_latest_telemetry():
             if s_id not in sensors_dict:
                 sensors_dict[s_id] = {
                     "sensor_id": s_id,
-                    "time": record.get_time().isoformat()
+                    "timestamp": record.get_time().isoformat()
                 }
             
             # Extract the field name (temperature, current, vibration_x, ...) and its value
