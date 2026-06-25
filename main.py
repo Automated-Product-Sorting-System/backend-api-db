@@ -413,6 +413,12 @@ def edit_inspection(inspection_id: int,
                     request: InspectionConfirmRequest,
                     current_session: models.SystemSession = Depends(get_current_session),
                     db: Session = Depends(get_db)):
+    
+    # Confirm the current user is not a viewer
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    if not current_user or current_user.user_role.value == "Viewer":
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
+    
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
     
     if not inspection:
@@ -433,6 +439,12 @@ def edit_inspection(inspection_id: int,
 def confirm_only(inspection_id: int,
                  current_session: models.SystemSession = Depends(get_current_session),
                  db: Session = Depends(get_db)):
+   
+    # Confirm the current user is not a viewer
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    if not current_user or current_user.user_role.value == "Viewer":
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
+    
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
     
     if not inspection:
@@ -459,6 +471,12 @@ def confirm_only(inspection_id: int,
 def reject_and_delete(inspection_id: int,
                       current_session: models.SystemSession = Depends(get_current_session),
                       db: Session = Depends(get_db)):
+    
+    # Confirm the current user is not a viewer
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    if not current_user or current_user.user_role.value == "Viewer":
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
+    
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
     
     if not inspection:
