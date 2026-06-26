@@ -364,9 +364,9 @@ def get_all_sessions(
     sessions = db.query(models.SystemSession).all()
     return sessions
 
-# ==============================================
-# Machine Control Endpoint (START/STOP/RESET)
-# ==============================================
+# ==================================================
+# Machine Control (START/STOP) & Status Endpoints
+# ==================================================
 
 class MachineCommand(BaseModel):
     command: str 
@@ -406,6 +406,61 @@ def control_machine(
         return {"status": "success", "message": f"Command '{request.command}' sent to PLC."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with PLC: {str(e)}")
+
+@app.get("/machine/status")
+def get_machine_status(current_session: models.SystemSession = Depends(get_current_session)):
+    """
+    Fetches the current status of the machine based on latest current readings.
+    """
+    try:
+        # Fetch the latest telemetry data from InfluxDB
+        telemetry_data = get_latest_telemetry()
+        
+        # In case no telemetry data is available (Example: Machine not yet sending data)
+        if not telemetry_data:
+            return {
+                "status": "success", 
+                "machine_status": "UNKNOWN", 
+                "current_amps": 0.0,
+                "message": "No telemetry data found."
+            }
+
+        current_value = 0.0
+        found_current = False
+        last_timestamp = None
+
+        # Iterate through the every dictionary in telemetry data
+        for reading in telemetry_data:
+            # Check if the "current" field exists in the reading
+            if "current" in reading:
+                current_value = float(reading["current"])
+                last_timestamp = reading.get("timestamp")
+                found_current = True
+                break  # Found it! Stop iterating to save time.
+
+        # If the "current" field is not found in any reading
+        if not found_current:
+             return {
+                "status": "success", 
+                "machine_status": "UNKNOWN", 
+                "current_amps": 0.0,
+                "message": "Current sensor data not found in recent telemetry."
+            }
+
+        # Apply the threshold logic
+        if current_value > 0.5:
+            machine_state = "RUNNING"
+        else:
+            machine_state = "STOPPED"
+            
+        return {
+            "status": "success",
+            "machine_status": machine_state,
+            "last_updated": last_timestamp
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch machine status: {str(e)}")
 
 # ==========================================
 # Inspection (Computer Vision) Endpoints
