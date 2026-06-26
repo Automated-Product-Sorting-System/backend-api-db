@@ -46,10 +46,10 @@ def on_message(client, userdata, msg):
     Handles data transformation and writes directly to InfluxDB.
     """
     try:
-        # Expected payload format: {"sensor_id": "SN-001", "temperature": 24.5, ...}
+        # Expected payload format: {"sensor_id": "SN-001", "timestamp": "2026-01-01T00:00:00Z", "temperature": 24.5, ...}
         payload = json.loads(msg.payload.decode("utf-8"))
         sensor_id = payload.get("sensor_id")
-        
+        timestamp = payload.get("timestamp")
         if not sensor_id:
             logger.warning("Received payload missing 'sensor_id' field. Skipping write.")
             return
@@ -57,11 +57,15 @@ def on_message(client, userdata, msg):
         # Create the Point outside the loop, passing sensor_id as a tag
         point = Point("SensorData").tag("sensor_id", sensor_id)
         
+        # Set the timestamp if provided
+        if timestamp:
+            point.time(timestamp)
+        
         has_fields = False
         
         #  Iterate through fields and add them to the same Point to ensure exact same Timestamp
         for field, value in payload.items():
-            if field == "sensor_id":
+            if field in ["sensor_id", "timestamp"]:
                 continue
             
             point.field(field, float(value))
