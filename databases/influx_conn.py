@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from influxdb_client.client.influxdb_client import InfluxDBClient
-from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.client.write_api import SYNCHRONOUS, WriteOptions
 
 load_dotenv()
 
@@ -15,6 +15,8 @@ if not INFLUXDB_TOKEN or not INFLUXDB_URL:
 
 client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
 write_api = client.write_api(write_options=SYNCHRONOUS)
+batch_options = WriteOptions(batch_size=50, flush_interval=1000, jitter_interval=200, retry_interval=5000, max_retries=3)
+batch_write_api = client.write_api(write_options=batch_options)
 query_api = client.query_api()
 
 def get_latest_telemetry():

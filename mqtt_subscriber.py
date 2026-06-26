@@ -9,7 +9,7 @@ import ssl
 from influxdb_client.client.write.point import Point
 
 # Internal imports
-from databases.influx_conn import write_api, INFLUXDB_BUCKET, INFLUXDB_ORG
+from databases.influx_conn import batch_write_api, INFLUXDB_BUCKET, INFLUXDB_ORG
 
 # Configure logging for production environment
 logging.basicConfig(
@@ -71,9 +71,9 @@ def on_message(client, userdata, msg):
             point.field(field, float(value))
             has_fields = True
             
-        # Execute the database write operation once to minimize resource consumption
+        # # Execute the database write operation via the Background Batcher
         if has_fields:
-            write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+            batch_write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
             logger.info(f"Telemetry metrics processed and persisted for sensor: {sensor_id}")
 
     except json.JSONDecodeError:
@@ -106,6 +106,10 @@ def main():
         logger.info("MQTT Subscriber service stopped by administrator.")
     except Exception as e:
         logger.critical(f"MQTT Service crashed unexpectedly: {str(e)}")
+    finally:
+        # Flush any remaining batched writes before closing
+        logger.info("Flushing remaining InfluxDB batch writes...")
+        batch_write_api.close()    
 
 if __name__ == "__main__":
     main()
