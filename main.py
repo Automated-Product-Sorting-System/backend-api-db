@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
@@ -439,7 +439,7 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
                 break  # Found it! Stop iterating to save time.
 
         # If the "current" field is not found in any reading
-        if not found_current:
+        if not found_current or not last_timestamp:
              return {
                 "status": "success", 
                 "machine_status": "UNKNOWN", 
@@ -447,16 +447,30 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
                 "message": "Current sensor data not found in recent telemetry."
             }
 
-        # Apply the threshold logic
-        if current_value > 0.5:
-            machine_state = "RUNNING"
+        # Calculate the age of the last reading
+        # Convert the timestamp to a datetime object
+        reading_time = datetime.fromisoformat(last_timestamp.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        
+        # Calculate the difference in seconds
+        seconds_since_last_reading = (now - reading_time).total_seconds()
+
+        # If the last reading is older than 10 seconds, mark the machine as offline
+        if seconds_since_last_reading > 10:
+            machine_state = "OFFLINE"  # Mark the machine as offline
+            current_value = 0.0        # Set current to 0
         else:
-            machine_state = "STOPPED"
+            # If the last reading is recent, apply the threshold logic
+            if current_value > 0.5:
+                machine_state = "RUNNING"
+            else:
+                machine_state = "STOPPED"
             
         return {
             "status": "success",
             "machine_status": machine_state,
-            "last_updated": last_timestamp
+            "last_updated": last_timestamp,
+            "data_age_seconds": round(seconds_since_last_reading, 1) # Age of the recent data in seconds
         }
         
     except Exception as e:
