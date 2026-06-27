@@ -49,10 +49,6 @@ def on_message(client, userdata, msg):
         elif command == "STOP":
             plc_client.write_coil(0, False)
             print("⏹️ PLC Status: MOTOR STOPPED")
-            
-        elif command == "RESET":
-            plc_client.write_coil(1, True)
-            print("🔄 PLC Status: SYSTEM RESET")
 
         plc_client.close()
 
