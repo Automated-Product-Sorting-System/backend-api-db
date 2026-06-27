@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form
-from sqlalchemy.orm import Session
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from uuid import UUID
 from typing import Optional
@@ -55,6 +56,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount the static files directory
+app.mount("/static", StaticFiles(directory="."), name="static")
 
 # ==========================================
 # Password Hashing Setup
@@ -484,6 +488,8 @@ class InspectionConfirmRequest(BaseModel):
     status: str         
     defect_type: str | None = None    # Accepts nulls if status is Good
 
+# CONFIDENCE_THRESHOLD = 0.85
+
 @app.post("/inspections", response_model=schemas.InspectionResponse)
 def create_automated_inspection(
     sensor_id: str = Form(...),
@@ -497,6 +503,11 @@ def create_automated_inspection(
     Endpoint for the Computer Vision / AI Model to submit new inspection results along with the physical image.
     """
     temp_image_path = None
+    
+    # Ignore the image if the confidence score is high enough
+    # if image_file and confidence_score >= CONFIDENCE_THRESHOLD:
+        # print(f"Ignored image for high confidence ({confidence_score})")
+        # image_file = None
     
     # Check if an image file is provided
     if image_file:
@@ -627,6 +638,18 @@ def reject_and_delete(inspection_id: int,
         "status": "success",
         "message": f"Inspection {inspection_id} image deleted."
     }
+
+@app.get("/inspections/pending-review", response_model=list[schemas.InspectionResponse])
+def get_pending_inspections(db: Session = Depends(get_db)):
+    """
+    Returns a list of inspections that have images need to be reviewed.
+    """
+    # SQL Query: SELECT * FROM inspections WHERE cv_image_url IS NOT NULL;
+    pending_reviews = db.query(models.Inspection).filter(
+        models.Inspection.cv_image_url.isnot(None)
+    ).all()
+    
+    return pending_reviews
 
 # ==========================================
 # Telemetry (InfluxDB) Endpoints
