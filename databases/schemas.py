@@ -63,6 +63,7 @@ class InspectionBase(BaseModel):
     status: InspectionStatus
     defect_type: Optional[str] = None
     cv_image_url: Optional[str] = None
+    confidence_score: Optional[float] = None
 
 class InspectionCreate(InspectionBase):
     pass

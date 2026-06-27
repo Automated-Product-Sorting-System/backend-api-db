@@ -1,6 +1,6 @@
 import enum
 import uuid
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Enum as SQLEnum, CheckConstraint
+from sqlalchemy import Column, Float, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Enum as SQLEnum, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from databases.postgres_conn import Base
@@ -71,3 +71,4 @@ class Inspection(Base):
     defect_type = Column(String(255), nullable=True)
     cv_image_url = Column(Text, nullable=True)
     inspected_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    confidence_score = Column(Float, nullable=True)

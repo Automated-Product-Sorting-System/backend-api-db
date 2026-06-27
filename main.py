@@ -482,13 +482,14 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
 
 class InspectionConfirmRequest(BaseModel):
     status: str         
-    defect_type: str    
+    defect_type: str | None = None    # Accepts nulls if status is Good
 
 @app.post("/inspections", response_model=schemas.InspectionResponse)
 def create_automated_inspection(
     sensor_id: str = Form(...),
     status: str = Form(...),
     defect_type: str = Form(None),
+    confidence_score: float = Form(...),
     image_file: UploadFile = File(None), # Receive the actual image file
     db: Session = Depends(get_db)
 ):
@@ -514,6 +515,7 @@ def create_automated_inspection(
         sensor_id=sensor_id,
         status=status,
         defect_type=defect_type,
+        confidence_score=confidence_score,
         cv_image_url=temp_image_path  # Save the temporary path on the server
     )
     
@@ -535,7 +537,6 @@ def edit_inspection(inspection_id: int,
         raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
     
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
-    
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
@@ -543,11 +544,24 @@ def edit_inspection(inspection_id: int,
     inspection.status = request.status
     inspection.defect_type = request.defect_type
     
+    # Upload the image after correcting its classification
+    old_path = inspection.cv_image_url
+    if old_path and "cloudinary.com" not in old_path:
+        new_category = request.defect_type or request.status
+        new_path = move_to_confirmed_dataset(old_path, new_category)
+        
+        if new_path:
+            inspection.cv_image_url = new_path
+        else:
+            # Handle the case where the image is lost due to server restart
+            inspection.cv_image_url = None
+    
     db.commit()
     return {
         "message": "Data updated and confirmed",
         "new_status": inspection.status,
-        "new_category": inspection.defect_type
+        "new_category": inspection.defect_type,
+        "image_url": inspection.cv_image_url
     }
 
 @app.put("/inspections/{inspection_id}/confirm")
@@ -561,7 +575,6 @@ def confirm_only(inspection_id: int,
         raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
     
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
-    
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     
@@ -570,16 +583,23 @@ def confirm_only(inspection_id: int,
     
     print(f"Inspection {inspection_id} has been confirmed by user.")
     
-    if old_path:
-        new_path = move_to_confirmed_dataset(old_path, inspection.defect_type or inspection.status)
+    # Upload the image after confirming its classification
+    if old_path and "cloudinary.com" not in old_path:
+        category = inspection.defect_type or inspection.status
+        new_path = move_to_confirmed_dataset(old_path, category)
+        
         if new_path:
             inspection.cv_image_url = new_path
-            db.commit()
+        else:
+            inspection.cv_image_url = None
+            
+    db.commit()
 
     return {
         "status": "success",
         "message": f"Inspection {inspection_id} confirmed",
         "final_status": inspection.status,
+        "image_url": inspection.cv_image_url
     }
 
 @app.put("/inspections/{inspection_id}/delete_image")
@@ -593,7 +613,6 @@ def reject_and_delete(inspection_id: int,
         raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
     
     inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
-    
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
 

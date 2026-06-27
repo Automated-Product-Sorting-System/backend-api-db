@@ -38,7 +38,8 @@ CREATE TABLE Inspections (
     status inspection_status NOT NULL,
     defect_type VARCHAR(255),
     cv_image_url TEXT,
-    inspected_at TIMESTAMPTZ DEFAULT NOW()
+    inspected_at TIMESTAMPTZ DEFAULT NOW(),
+    confidence_score FLOAT
 );
 
 CREATE INDEX idx_inspections_user_time ON Inspections(user_id, inspected_at DESC);
