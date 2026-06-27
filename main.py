@@ -397,7 +397,7 @@ def control_machine(
         # Sending only one message then close connection
         publish.single(
             topic="factory/plc/commands",  # Topic for PLC commands
-            payload=json.dumps({"action": request.command}),
+            payload=json.dumps({"command": request.command}),
             hostname=broker,
             port=port,
             auth=auth_dict,
