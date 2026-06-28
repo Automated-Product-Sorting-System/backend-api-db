@@ -409,78 +409,74 @@ def control_machine(
 @app.get("/machine/status")
 def get_machine_status(current_session: models.SystemSession = Depends(get_current_session)):
     """
-    Fetches the current status of the machine based on PLC logic combined with actual current sensor readings.
+    Fetches the current status of the machine by independently reading PLC status and Current sensor data.
     """
     try:
-        # Fetch the latest telemetry data from InfluxDB
         telemetry_data = get_latest_telemetry()
-       
+        
         if not telemetry_data:
             return {
-                "status": "success",
-                "machine_status": "UNKNOWN",
+                "status": "success", 
+                "machine_status": "UNKNOWN", 
                 "current_amps": 0.0,
                 "plc_logical_state": "UNKNOWN",
                 "message": "No telemetry data found."
             }
-        
+
         current_value = 0.0
         plc_status = "UNKNOWN"
-        found_current = False
-        last_timestamp = None
-        
-        # Extract values
+        last_current_timestamp = None
+
+        # Search through current reading data and PLC status
         for reading in telemetry_data:
+            # Search for current reading
             if "current" in reading:
                 current_value = float(reading["current"])
-                plc_status = reading.get("plc_status", "UNKNOWN")  # Retrieve the merged PLC status
-                last_timestamp = reading.get("timestamp")
-                found_current = True
-                break
-                
-        if not found_current or not last_timestamp:
+                last_current_timestamp = reading.get("timestamp")
+            
+            # Search for PLC status
+            if reading.get("sensor_id") == "PLC" and "plc_status" in reading:
+                plc_status = reading.get("plc_status")
+
+        if not last_current_timestamp:
              return {
-                "status": "success",
-                "machine_status": "UNKNOWN",
+                "status": "success", 
+                "machine_status": "UNKNOWN", 
                 "current_amps": 0.0,
                 "plc_logical_state": plc_status,
                 "message": "Current sensor data not found in recent telemetry."
             }
-        
-        # Calculate data age
-        reading_time = datetime.fromisoformat(last_timestamp.replace("Z", "+00:00"))
+
+        # Calculate the age of the last current reading to determine if the machine is online
+        reading_time = datetime.fromisoformat(last_current_timestamp.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         seconds_since_last_reading = (now - reading_time).total_seconds()
-        
-        # Smart Logic Engine for combining PLC command with actual sensor reading
+
+        # Determine machine state based on PLC status and current reading
         if seconds_since_last_reading > 10:
             machine_state = "OFFLINE"
             current_value = 0.0
         else:
-            # 1. Normal running state
             if plc_status == "START" and current_value > 0.5:
                 machine_state = "RUNNING"
-            # 2. Normal stopped state
             elif plc_status == "STOP" and current_value <= 0.5:
                 machine_state = "STOPPED"
-            # 3. Fault: PLC commands START but no current (burnt motor, broken belt, etc.)
             elif plc_status == "START" and current_value <= 0.5:
                 machine_state = "FAULT_NO_LOAD"
-            # 4. Fault: PLC commands STOP but there is current draw (manual override, stuck contactor)
             elif plc_status == "STOP" and current_value > 0.5:
                 machine_state = "FAULT_MANUAL_OVERRIDE"
             else:
                 machine_state = "UNKNOWN_STATE"
-           
+            
         return {
             "status": "success",
             "machine_status": machine_state,
             "plc_logical_state": plc_status,
             "current_amps": current_value,
-            "last_updated": last_timestamp,
+            "last_updated": last_current_timestamp,
             "data_age_seconds": round(seconds_since_last_reading, 1)
         }
-       
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch machine status: {str(e)}")
 

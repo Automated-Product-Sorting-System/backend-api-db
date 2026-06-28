@@ -31,10 +31,6 @@ if not MQTT_BROKER or not MQTT_TOPIC:
     raise ValueError("MQTT_BROKER or MQTT_TOPIC is missing in the .env file!")
 
 
-# In-memory cache to store the last known PLC status
-last_known_plc_status = "UNKNOWN"
-
-
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         logger.info(f"Connected to MQTT Broker at {MQTT_BROKER}:{MQTT_PORT}")
@@ -46,44 +42,50 @@ def on_connect(client, userdata, flags, rc, properties=None):
 
 
 def on_message(client, userdata, msg):
-    global last_known_plc_status
     try:
         topic = msg.topic
         payload = json.loads(msg.payload.decode("utf-8"))
 
-        # First scenario: Message from PLC (update cache only)
+        # Message from PLC
         if topic == STATUS_TOPIC:
-            last_known_plc_status = payload.get("status", "UNKNOWN")
-            return  # No need to write to database, wait for sensor data
+            plc_status = payload.get("status", "UNKNOWN")
+            
+            # بنعمل Point مخصصة للـ PLC كأنه حساس مستقل
+            point = Point("SensorData").tag("sensor_id", "PLC").field("plc_status", plc_status)
+            batch_write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+            logger.info(f"Independent PLC status persisted: {plc_status}")
+            return 
 
-        # Second scenario: Message from sensors (merge and persist)
+        # Message from ESP
         if topic == MQTT_TOPIC:
-            sensor_id = payload.get("sensor_id")
-            timestamp = payload.get("timestamp")
-           
-            if not sensor_id:
-                logger.warning("Received payload missing 'sensor_id' field. Skipping write.")
-                return
+            if isinstance(payload, list):
+                for item in payload:
+                    sensor_id = item.get("sensor_id")
+                    timestamp = item.get("timestamp")
+                    
+                    if not sensor_id:
+                        continue 
 
-            point = Point("SensorData").tag("sensor_id", sensor_id)
-           
-            if timestamp:
-                point.time(timestamp)
-           
-            has_fields = False
-           
-            for field, value in payload.items():
-                if field in ["sensor_id", "timestamp"]:
-                    continue
-                point.field(field, float(value))
-                has_fields = True
-               
-            # Key logic: Enrich sensor data with current PLC status
-            if has_fields:
-                point.field("plc_status", last_known_plc_status)
-               
-                batch_write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-                logger.info(f"Enriched Telemetry persisted for sensor {sensor_id} | PLC: {last_known_plc_status}")
+                    point = Point("SensorData").tag("sensor_id", sensor_id)
+                    
+                    if timestamp:
+                        point.time(timestamp)
+                    
+                    has_fields = False
+                    
+                    # Process each field in the item
+                    for field, value in item.items():
+                        if field in ["sensor_id", "timestamp"]:
+                            continue
+                        point.field(field, float(value))
+                        has_fields = True
+                        
+                    if has_fields:
+                        batch_write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+                
+                logger.info("Batch of independent sensor readings processed.")
+            else:
+                logger.warning("Received payload is not a JSON Array. Please check the IoT device format.")
 
     except json.JSONDecodeError:
         logger.error("Failed to decode incoming MQTT message payload.")
