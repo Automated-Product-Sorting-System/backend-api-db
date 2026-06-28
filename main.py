@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -15,10 +14,9 @@ import threading
 import uvicorn
 import asyncio
 import uuid
-import shutil
 
 # Internal imports
-from core.utils import move_to_confirmed_dataset, delete_inspection_image
+from core.utils import upload_image, move_cloudinary_asset, delete_cloudinary_asset
 from databases import models
 from databases import schemas
 from databases.postgres_conn import engine, get_db, SessionLocal
@@ -56,9 +54,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Mount the static files directory
-app.mount("/static", StaticFiles(directory="."), name="static")
 
 # ==========================================
 # Password Hashing Setup
@@ -484,6 +479,24 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
 # Inspection (Computer Vision) Endpoints
 # ==========================================
 
+def background_upload_task(inspection_id: int, image_bytes: bytes):
+    """
+    Background task to upload inspection image to Cloudinary.
+    """
+    db = SessionLocal() # Open a fresh database session for background task
+    try:
+        secure_url = upload_image(image_bytes, folder="Nexus_System/Pending")
+        
+        inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
+        if inspection:
+            if secure_url:
+                inspection.cv_image_url = secure_url
+            else:
+                inspection.cv_image_url = None # Clear URL if upload fails
+            db.commit()
+    finally:
+        db.close() # Close the connection to prevent resource leaks (Memory Leak)
+
 class InspectionConfirmRequest(BaseModel):
     status: str         
     defect_type: str | None = None    # Accepts nulls if status is Good
@@ -491,96 +504,107 @@ class InspectionConfirmRequest(BaseModel):
 # CONFIDENCE_THRESHOLD = 0.85
 
 @app.post("/inspections", response_model=schemas.InspectionResponse)
-def create_automated_inspection(
+async def create_automated_inspection(
+    background_tasks: BackgroundTasks,      # Inject background tasks service
     sensor_id: str = Form(...),
     status: str = Form(...),
     defect_type: str = Form(None),
     confidence_score: float = Form(...),
-    image_file: UploadFile = File(None), # Receive the actual image file
+    image_file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Endpoint for the Computer Vision / AI Model to submit new inspection results along with the physical image.
-    """
-    temp_image_path = None
+    """Create a new automated inspection with background image upload."""
+    
+    image_bytes = None
     
     # Ignore the image if the confidence score is high enough
     # if image_file and confidence_score >= CONFIDENCE_THRESHOLD:
         # print(f"Ignored image for high confidence ({confidence_score})")
         # image_file = None
-    
-    # Check if an image file is provided
-    if image_file:
-        # Generate a unique filename to avoid conflicts
-        file_extension = image_file.filename.split('.')[-1]
-        temp_filename = f"temp_{uuid.uuid4()}.{file_extension}"
-        temp_image_path = f"./{temp_filename}"
-        
-        # Save the file temporarily on the server
-        with open(temp_image_path, "wb") as buffer:
-            shutil.copyfileobj(image_file.file, buffer)
 
-    # Create the inspection record in the database
+    # Read the uploaded file into memory immediately (if provided)
+    if image_file:
+        image_bytes = await image_file.read()
+
+    # Create the inspection record with a temporary flag until background upload completes
     new_inspection = models.Inspection(
         user_id=None,
         sensor_id=sensor_id,
         status=status,
         defect_type=defect_type,
         confidence_score=confidence_score,
-        cv_image_url=temp_image_path  # Save the temporary path on the server
+        cv_image_url="uploading_in_background" if image_bytes else None
     )
-    
+
     db.add(new_inspection)
     db.commit()
     db.refresh(new_inspection)
-    
+
+    # Queue the image for background upload and return response immediately
+    if image_bytes:
+        background_tasks.add_task(
+            background_upload_task,
+            new_inspection.inspection_id,
+            image_bytes
+        )
+
     return new_inspection
 
 @app.put("/inspections/{inspection_id}/edit")
-def edit_inspection(inspection_id: int,
-                    request: InspectionConfirmRequest,
-                    current_session: models.SystemSession = Depends(get_current_session),
-                    db: Session = Depends(get_db)):
+def edit_inspection(
+    inspection_id: int,
+    request: InspectionConfirmRequest,
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    """Update inspection data and move Cloudinary asset to the new category"""
     
-    # Confirm the current user is not a viewer
-    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    current_user = db.query(models.User).filter(
+        models.User.user_id == current_session.user_id
+    ).first()
+    
     if not current_user or current_user.user_role.value == "Viewer":
-        raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
+        raise HTTPException(
+            status_code=403, 
+            detail="Viewers are not allowed to confirm or modify inspections."
+        )
+
+    inspection = db.query(models.Inspection).filter(
+        models.Inspection.inspection_id == inspection_id
+    ).first()
     
-    inspection = db.query(models.Inspection).filter(models.Inspection.inspection_id == inspection_id).first()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
     inspection.user_id = current_session.user_id
     inspection.status = request.status
     inspection.defect_type = request.defect_type
-    
-    # Upload the image after correcting its classification
-    old_path = inspection.cv_image_url
-    if old_path and "cloudinary.com" not in old_path:
+
+    old_cloud_url = inspection.cv_image_url
+
+    # Only move the image if it has already been uploaded (not in background queue)
+    if old_cloud_url and old_cloud_url != "uploading_in_background":
         new_category = request.defect_type or request.status
-        new_path = move_to_confirmed_dataset(old_path, new_category)
-        
-        if new_path:
-            inspection.cv_image_url = new_path
-        else:
-            # Handle the case where the image is lost due to server restart
-            inspection.cv_image_url = None
-    
+        new_cloud_url = move_cloudinary_asset(old_cloud_url, new_category)
+
+        if new_cloud_url:
+            inspection.cv_image_url = new_cloud_url
+
     db.commit()
+
     return {
-        "message": "Data updated and confirmed",
+        "message": "Data updated and image moved on Cloudinary",
         "new_status": inspection.status,
         "new_category": inspection.defect_type,
         "image_url": inspection.cv_image_url
     }
 
 @app.put("/inspections/{inspection_id}/confirm")
-def confirm_only(inspection_id: int,
-                 current_session: models.SystemSession = Depends(get_current_session),
-                 db: Session = Depends(get_db)):
-   
-    # Confirm the current user is not a viewer
+def confirm_only(
+    inspection_id: int,
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
     current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
     if not current_user or current_user.user_role.value == "Viewer":
         raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
@@ -590,35 +614,30 @@ def confirm_only(inspection_id: int,
         raise HTTPException(status_code=404, detail="Inspection not found")
     
     inspection.user_id = current_session.user_id
-    old_path = inspection.cv_image_url
+    old_cloud_url = inspection.cv_image_url
     
-    print(f"Inspection {inspection_id} has been confirmed by user.")
-    
-    # Upload the image after confirming its classification
-    if old_path and "cloudinary.com" not in old_path:
+    if old_cloud_url and old_cloud_url != "uploading_in_background":
         category = inspection.defect_type or inspection.status
-        new_path = move_to_confirmed_dataset(old_path, category)
+        new_cloud_url = move_cloudinary_asset(old_cloud_url, category)
         
-        if new_path:
-            inspection.cv_image_url = new_path
-        else:
-            inspection.cv_image_url = None
+        if new_cloud_url:
+            inspection.cv_image_url = new_cloud_url
             
     db.commit()
 
     return {
         "status": "success",
-        "message": f"Inspection {inspection_id} confirmed",
+        "message": f"Inspection {inspection_id} confirmed and categorized",
         "final_status": inspection.status,
         "image_url": inspection.cv_image_url
     }
 
 @app.put("/inspections/{inspection_id}/delete_image")
-def reject_and_delete(inspection_id: int,
-                      current_session: models.SystemSession = Depends(get_current_session),
-                      db: Session = Depends(get_db)):
-    
-    # Confirm the current user is not a viewer
+def reject_and_delete(
+    inspection_id: int,
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
     current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
     if not current_user or current_user.user_role.value == "Viewer":
         raise HTTPException(status_code=403, detail="Viewers are not allowed to confirm or modify inspections.")
@@ -629,14 +648,16 @@ def reject_and_delete(inspection_id: int,
 
     inspection.user_id = current_session.user_id
 
-    if inspection.cv_image_url:
-        delete_inspection_image(inspection.cv_image_url)
-        inspection.cv_image_url = None
-        db.commit()
+    # Delete the image from Cloudinary
+    if inspection.cv_image_url and inspection.cv_image_url != "uploading_in_background":
+        delete_cloudinary_asset(inspection.cv_image_url)
+        
+    inspection.cv_image_url = None
+    db.commit()
 
     return {
         "status": "success",
-        "message": f"Inspection {inspection_id} image deleted."
+        "message": f"Inspection {inspection_id} image deleted from cloud."
     }
 
 @app.get("/inspections/pending-review", response_model=list[schemas.InspectionResponse])
