@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from typing import Optional
 from passlib.context import CryptContext
@@ -377,7 +377,7 @@ def control_machine(
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)
 ):
-    # Check if the user is an Admin or Operator
+    # Check if the user is an Admin or Operator (Viewers are not allowed to change system settings)
     current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
     if not current_user or current_user.user_role.value == "Viewer":
         raise HTTPException(status_code=403, detail="Viewers are not allowed to control the machine.")
@@ -480,6 +480,49 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch machine status: {str(e)}")
+
+# ==========================================
+# Belt Speed Control Endpoint
+# ==========================================
+
+class SpeedCommand(BaseModel):
+    speed_percentage: int = Field(..., ge=0, le=100, description="Speed percentage from 0 to 100")
+
+@app.post("/belt/speed")
+def set_belt_speed(
+    request: SpeedCommand,
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    # Check if the user is an Admin or Operator (Viewers are not allowed to change system settings)
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+    if not current_user or current_user.user_role.value == "Viewer":
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to change belt speed.")
+
+    broker = os.getenv("MQTT_BROKER")
+    port = int(os.getenv("MQTT_PORT", 8883))
+    username = os.getenv("MQTT_USERNAME")
+    password = os.getenv("MQTT_PASSWORD")
+    
+    auth_dict = {'username': username, 'password': password} if username and password else None
+    tls_dict = {'ca_certs': None} if port == 8883 else None
+
+    try:
+        # Send speed command and percentage via MQTT
+        publish.single(
+            topic="factory/plc/commands",
+            payload=json.dumps({
+                "command": "SET_SPEED", 
+                "value": request.speed_percentage
+            }),
+            hostname=broker,
+            port=port,
+            auth=auth_dict,
+            tls=tls_dict
+        )
+        return {"status": "success", "message": f"Speed command sent: {request.speed_percentage}%"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to communicate with PLC: {str(e)}")
 
 # ==========================================
 # Inspection (Computer Vision) Endpoints

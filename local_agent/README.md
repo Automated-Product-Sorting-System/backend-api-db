@@ -7,7 +7,10 @@ Since the Cloud API cannot directly communicate with local factory networks due 
 
 It operates with a **Stateful, Two-Way Architecture**:
 
-1. **Downstream (Command Execution):** It subscribes to the Cloud MQTT Broker (`factory/plc/commands`), listens for control commands (`START`, `STOP`) sent from the UI, and translates them into **Modbus TCP** commands sent directly to the local PLC.
+1. **Downstream (Command Execution):** It subscribes to the Cloud MQTT Broker (`factory/plc/commands`) and listens for operational commands sent from the UI:
+   - **START/STOP Commands:** Translates these commands into **Modbus TCP Coil** writes to physically start or halt the conveyor motor.
+   - **Speed Control (`SET_SPEED`):** Receives a speed percentage (0-100%) from the UI, scales it mathematically to an 8-bit digital value (0-255), and pushes it to the PLC via **Modbus TCP Holding Registers**.
+
 2. **Upstream (Telemetry & State Sync):** It runs a background thread that continuously polls the PLC's actual logical state via Modbus TCP every second. It then publishes this state to the cloud (`factory/plc/status`), allowing the cloud API to perform smart fault detection (e.g., detecting motor failures or manual overrides).
 
 ## ⚙️ Prerequisites
@@ -18,16 +21,24 @@ It operates with a **Stateful, Two-Way Architecture**:
 ## 🚀 How to Setup & Run
 
 ### 1. Navigate to the local_agent directory:
-    cd local_agent
+```bash
+cd local_agent
+```
 
 ### 2. Install dependencies:
-    pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
+```
 
 ### 3. Configure Environment Variables:
 Copy the .env.example file and rename it to .env, then fill in your actual Cloud MQTT credentials and the exact local IP address of the PLC.
-    cp .env.example .env
+```bash
+cp .env.example .env
+```
 
 ### 4. Run the Agent:
-    python local_agent.py
+```bash
+python local_agent.py
+```
 
 *Keep this terminal window running in the background during operations to maintain the bi-directional connection between the cloud and the machine.*

@@ -49,7 +49,8 @@ def on_message(client, userdata, msg):
         if not plc_client.connect():
             print("Error: Could not connect to local PLC. Check IP and network connection!")
             return
-
+        
+        # 1. Start/Stop motor
         if command == "START":
             plc_client.write_coil(0, True)
             print("PLC Status: MOTOR STARTED")
@@ -57,6 +58,19 @@ def on_message(client, userdata, msg):
         elif command == "STOP":
             plc_client.write_coil(0, False)
             print("PLC Status: MOTOR STOPPED")
+            
+        # 2. Set Belt Speed
+        elif command == "SET_SPEED":
+            speed_percentage = payload.get("value", 0)
+            
+            # Convert percentage (0-100) to digital value (0-255)
+            plc_value = int((speed_percentage / 100.0) * 255)
+            
+            # Write the value to the Holding Register 
+            register_address = 1  # Attached to speed register which set up already in the PLC
+            plc_client.write_register(register_address, plc_value)
+            
+            print(f"⏩ PLC Status: SPEED SET TO {speed_percentage}% (Register Value: {plc_value})")
             
         plc_client.close()
         
