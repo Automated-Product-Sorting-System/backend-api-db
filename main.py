@@ -551,8 +551,8 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
         # Dual-Lookup: Extract actual speed and PLC registered speed independently
         for reading in telemetry_data:
             # Assumes the physical speed sensor ID is 'Speed_01' and sends data as 'speed'
-            if reading.get("sensor_id") == "Speed_01" and "motor_speed" in reading:
-                actual_speed = float(reading["motor_speed"])
+            if reading.get("sensor_id") == "Speed_01" and "belt_speed" in reading:
+                actual_speed = float(reading["belt_speed"])
                 last_speed_timestamp = reading.get("timestamp")
             
             # Extract the 8-bit speed value from the independent PLC record
