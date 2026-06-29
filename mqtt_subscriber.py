@@ -51,7 +51,7 @@ def on_message(client, userdata, msg):
             plc_status = payload.get("status", "UNKNOWN")
             speed_register = payload.get("speed_register", 0)
             
-            # S
+            # Create InfluxDB point
             point = Point("SensorData").tag("sensor_id", "PLC")
             point.field("plc_status", plc_status)
             point.field("speed_register", int(speed_register))
