@@ -487,6 +487,10 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
 
 class SpeedCommand(BaseModel):
     speed_percentage: int = Field(..., ge=0, le=100, description="Speed percentage from 0 to 100")
+    
+# ⚙️ Hardware Constants
+MAX_SPEED = 2.5            # Maximum speed in m/s
+SPEED_TOLERANCE_PERCENT = 5.0  # Allowed deviation percentage    
 
 @app.post("/belt/speed")
 def set_belt_speed(
@@ -536,12 +540,9 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
             return {
                 "status": "error", 
                 "correlation_state": "UNKNOWN",
-                "message": "No telemetry data found."
+                "message": "No telemetry data found.",
+                "max_speed_capacity": MAX_SPEED
             }
-
-        # ⚙️ Hardware Constants
-        MAX_SPEED = 2.5            # Maximum speed in m/s
-        SPEED_TOLERANCE_PERCENT = 5.0  # Allowed deviation percentage
 
         actual_speed = 0.0
         plc_speed_raw = 0  # 0 to 255
@@ -562,7 +563,8 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
              return {
                  "status": "error", 
                  "correlation_state": "UNKNOWN",
-                 "message": "Speed sensor data not found in recent telemetry."
+                 "message": "Speed sensor data not found in recent telemetry.",
+                 "max_speed_capacity": MAX_SPEED
              }
 
         # Normalization (Math)
