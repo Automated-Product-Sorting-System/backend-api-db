@@ -33,6 +33,8 @@ def on_connect(client, userdata, flags, rc):
     else:
         print(f"Failed to connect to MQTT Broker, return code {rc}")
 
+start_stop_coil_address = 0  # Maps to start/stop coil in the PLC
+speed_register_address = 10  # Maps to speed register in the PLC
 
 def on_message(client, userdata, msg):
     try:
@@ -52,11 +54,11 @@ def on_message(client, userdata, msg):
         
         # 1. Start/Stop motor
         if command == "START":
-            plc_client.write_coil(0, True)
+            plc_client.write_coil(start_stop_coil_address, True)
             print("PLC Status: MOTOR STARTED")
            
         elif command == "STOP":
-            plc_client.write_coil(0, False)
+            plc_client.write_coil(start_stop_coil_address, False)
             print("PLC Status: MOTOR STOPPED")
             
         # 2. Set Belt Speed
@@ -67,7 +69,6 @@ def on_message(client, userdata, msg):
             plc_value = int((speed_percentage / 100.0) * 255)
             
             # Write the value to the Holding Register 
-            speed_register_address = 1  # Attached to speed register which set up already in the PLC
             plc_client.write_register(speed_register_address, plc_value)
             
             print(f"PLC Status: SPEED SET TO {speed_percentage}% (Register Value: {plc_value})")
@@ -86,11 +87,10 @@ def publish_plc_status(mqtt_client):
         try:
             plc_client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
             if plc_client.connect():
-                # Read Coil 0 (controls the motor)
-                coil_result = plc_client.read_coils(0, 1)
+                # Read Coil (which controls the motor)
+                coil_result = plc_client.read_coils(start_stop_coil_address, 1)
                 
-                # Read Holding Register 1 (speed register)
-                speed_register_address = 1
+                # Read Holding Register (speed register)
                 reg_result = plc_client.read_holding_registers(speed_register_address, 1)
                 
                 if not coil_result.isError() and not reg_result.isError():
