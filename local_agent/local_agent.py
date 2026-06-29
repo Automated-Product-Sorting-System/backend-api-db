@@ -52,7 +52,7 @@ def on_message(client, userdata, msg):
 
         if command == "START":
             plc_client.write_coil(0, True)
-            print("▶PLC Status: MOTOR STARTED")
+            print("PLC Status: MOTOR STARTED")
            
         elif command == "STOP":
             plc_client.write_coil(0, False)
