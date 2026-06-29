@@ -49,11 +49,15 @@ def on_message(client, userdata, msg):
         # Message from PLC
         if topic == STATUS_TOPIC:
             plc_status = payload.get("status", "UNKNOWN")
+            speed_register = payload.get("speed_register", 0)
             
-            # بنعمل Point مخصصة للـ PLC كأنه حساس مستقل
-            point = Point("SensorData").tag("sensor_id", "PLC").field("plc_status", plc_status)
+            # S
+            point = Point("SensorData").tag("sensor_id", "PLC")
+            point.field("plc_status", plc_status)
+            point.field("speed_register", int(speed_register))
+            
             batch_write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-            logger.info(f"Independent PLC status persisted: {plc_status}")
+            logger.info(f"PLC status persisted: {plc_status} | Speed Reg: {speed_register}")
             return 
 
         # Message from ESP

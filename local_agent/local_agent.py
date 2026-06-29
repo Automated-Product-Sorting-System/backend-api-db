@@ -67,10 +67,10 @@ def on_message(client, userdata, msg):
             plc_value = int((speed_percentage / 100.0) * 255)
             
             # Write the value to the Holding Register 
-            register_address = 1  # Attached to speed register which set up already in the PLC
-            plc_client.write_register(register_address, plc_value)
+            speed_register_address = 1  # Attached to speed register which set up already in the PLC
+            plc_client.write_register(speed_register_address, plc_value)
             
-            print(f"⏩ PLC Status: SPEED SET TO {speed_percentage}% (Register Value: {plc_value})")
+            print(f"PLC Status: SPEED SET TO {speed_percentage}% (Register Value: {plc_value})")
             
         plc_client.close()
         
@@ -80,21 +80,30 @@ def on_message(client, userdata, msg):
 
 def publish_plc_status(mqtt_client):
     """
-    Background function that periodically reads the machine status from the PLC
-    and publishes it to the cloud.
+    Background function that periodically reads the motor status and speed from the PLC and publishes it to the cloud.
     """
     while True:
         try:
             plc_client = ModbusTcpClient(PLC_IP, port=PLC_PORT)
             if plc_client.connect():
                 # Read Coil 0 (controls the motor)
-                result = plc_client.read_coils(0, 1)
-                if not result.isError():
-                    is_running = result.bits[0]
+                coil_result = plc_client.read_coils(0, 1)
+                
+                # Read Holding Register 1 (speed register)
+                speed_register_address = 1
+                reg_result = plc_client.read_holding_registers(speed_register_address, 1)
+                
+                if not coil_result.isError() and not reg_result.isError():
+                    is_running = coil_result.bits[0]
                     status_str = "START" if is_running else "STOP"
+                    speed_val = reg_result.registers[0] # Get the 8-bit value (0-255)
                    
                     # Prepare and publish payload
-                    payload = json.dumps({"status": status_str, "source": "local_agent"})
+                    payload = json.dumps({
+                        "status": status_str, 
+                        "speed_register": speed_val,
+                        "source": "local_agent"
+                    })
                     mqtt_client.publish(STATUS_TOPIC, payload)
                 
                 plc_client.close()

@@ -23,7 +23,7 @@ This backend is built to handle industrial-grade data flow, separating high-freq
 * **Real-Time Telemetry:** Live sensor data streaming (Temperature, Current, Vibration) to mobile and web clients via **WebSockets**.
 * **Automated Data Ingestion:** A background MQTT subscriber daemon (`mqtt_subscriber.py`) that continuously listens to factory sensors and writes directly to InfluxDB.
 * **Computer Vision Integration:** Dedicated endpoints for the AI model to upload inspection results, classify defects, and store image paths.
-* **Machine Control:** Secure REST endpoints for Operators/Admins to send `START`, `STOP`, and `RESET` commands directly to the PLC via MQTT.
+* **Motor Control:** Secure REST endpoints for Operators/Admins to send `START` and `STOP` commands directly to the PLC via MQTT.
 
 ---
 

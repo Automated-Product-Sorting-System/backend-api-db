@@ -365,22 +365,22 @@ def get_all_sessions(
     return sessions
 
 # ==================================================
-# Machine Control (START/STOP) & Status Endpoints
+# Motor Control (START/STOP) & Status Endpoints
 # ==================================================
 
-class MachineCommand(BaseModel):
+class MotorCommand(BaseModel):
     command: str 
 
-@app.post("/machine/control")
-def control_machine(
-    request: MachineCommand,
+@app.post("/motor/control")
+def control_motor(
+    request: MotorCommand,
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)
 ):
     # Check if the user is an Admin or Operator (Viewers are not allowed to change system settings)
     current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
     if not current_user or current_user.user_role.value == "Viewer":
-        raise HTTPException(status_code=403, detail="Viewers are not allowed to control the machine.")
+        raise HTTPException(status_code=403, detail="Viewers are not allowed to control the system.")
 
     # Get MQTT connection details from .env
     broker = os.getenv("MQTT_BROKER")
@@ -407,10 +407,10 @@ def control_machine(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with PLC: {str(e)}")
 
-@app.get("/machine/status")
-def get_machine_status(current_session: models.SystemSession = Depends(get_current_session)):
+@app.get("/motor/status")
+def get_motor_status(current_session: models.SystemSession = Depends(get_current_session)):
     """
-    Fetches the current status of the machine by independently reading PLC status and Current sensor data.
+    Fetches the current status of the motor by independently reading PLC status and Current sensor data.
     """
     try:
         telemetry_data = get_latest_telemetry()
@@ -418,7 +418,7 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
         if not telemetry_data:
             return {
                 "status": "success", 
-                "machine_status": "UNKNOWN", 
+                "motor_status": "UNKNOWN", 
                 "current_amps": 0.0,
                 "plc_logical_state": "UNKNOWN",
                 "message": "No telemetry data found."
@@ -442,36 +442,36 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
         if not last_current_timestamp:
              return {
                 "status": "success", 
-                "machine_status": "UNKNOWN", 
+                "motor_status": "UNKNOWN", 
                 "current_amps": 0.0,
                 "plc_logical_state": plc_status,
                 "message": "Current sensor data not found in recent telemetry."
             }
 
-        # Calculate the age of the last current reading to determine if the machine is online
+        # Calculate the age of the last current reading to determine if the system is online
         reading_time = datetime.fromisoformat(last_current_timestamp.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         seconds_since_last_reading = (now - reading_time).total_seconds()
 
-        # Determine machine state based on PLC status and current reading
+        # Determine motor state based on PLC status and current reading
         if seconds_since_last_reading > 10:
-            machine_state = "OFFLINE"
+            motor_state = "OFFLINE"
             current_value = 0.0
         else:
             if plc_status == "START" and current_value > 0.5:
-                machine_state = "RUNNING"
+                motor_state = "RUNNING"
             elif plc_status == "STOP" and current_value <= 0.5:
-                machine_state = "STOPPED"
+                motor_state = "STOPPED"
             elif plc_status == "START" and current_value <= 0.5:
-                machine_state = "FAULT_NO_LOAD"
+                motor_state = "FAULT_NO_LOAD"
             elif plc_status == "STOP" and current_value > 0.5:
-                machine_state = "FAULT_MANUAL_OVERRIDE"
+                motor_state = "FAULT_MANUAL_OVERRIDE"
             else:
-                machine_state = "UNKNOWN_STATE"
+                motor_state = "UNKNOWN_STATE"
             
         return {
             "status": "success",
-            "machine_status": machine_state,
+            "motor_status": motor_state,
             "plc_logical_state": plc_status,
             "current_amps": current_value,
             "last_updated": last_current_timestamp,
@@ -479,11 +479,11 @@ def get_machine_status(current_session: models.SystemSession = Depends(get_curre
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch machine status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch motor status: {str(e)}")
 
-# ==========================================
-# Belt Speed Control Endpoint
-# ==========================================
+# ==============================================
+# Belt Speed Control & Display Speed Endpoints
+# ==============================================
 
 class SpeedCommand(BaseModel):
     speed_percentage: int = Field(..., ge=0, le=100, description="Speed percentage from 0 to 100")
@@ -523,6 +523,93 @@ def set_belt_speed(
         return {"status": "success", "message": f"Speed command sent: {request.speed_percentage}%"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to communicate with PLC: {str(e)}")
+
+@app.get("/belt/speed-status")
+def get_speed_status(current_session: models.SystemSession = Depends(get_current_session)):
+    """
+    Fetches the actual speed vs PLC commanded speed and runs a smart correlation engine to detect mechanical failures or anomalies.
+    """
+    try:
+        telemetry_data = get_latest_telemetry()
+        
+        if not telemetry_data:
+            return {
+                "status": "error", 
+                "correlation_state": "UNKNOWN",
+                "message": "No telemetry data found."
+            }
+
+        # ⚙️ Hardware Constants
+        MAX_SPEED = 2.5            # Maximum speed in m/s
+        SPEED_TOLERANCE_PERCENT = 5.0  # Allowed deviation percentage
+
+        actual_speed = 0.0
+        plc_speed_raw = 0  # 0 to 255
+        last_speed_timestamp = None
+
+        # Dual-Lookup: Extract actual speed and PLC registered speed independently
+        for reading in telemetry_data:
+            # Assumes the physical speed sensor ID is 'Speed_01' and sends data as 'speed'
+            if reading.get("sensor_id") == "Speed_01" and "motor_speed" in reading:
+                actual_speed = float(reading["motor_speed"])
+                last_speed_timestamp = reading.get("timestamp")
+            
+            # Extract the 8-bit speed value from the independent PLC record
+            if reading.get("sensor_id") == "PLC" and "speed_register" in reading:
+                plc_speed_raw = int(reading["speed_register"])
+
+        if not last_speed_timestamp:
+             return {
+                 "status": "error", 
+                 "correlation_state": "UNKNOWN",
+                 "message": "Speed sensor data not found in recent telemetry."
+             }
+
+        # Normalization (Math)
+        plc_target_percentage = (plc_speed_raw / 255.0) * 100.0
+        actual_speed_percentage = (actual_speed / MAX_SPEED) * 100.0
+
+        # Cap percentages at 100 to prevent UI issues if values slightly overshoot
+        plc_target_percentage = min(plc_target_percentage, 100.0)
+        actual_speed_percentage = min(actual_speed_percentage, 100.0)
+
+        # 3. Smart Correlation Engine
+        speed_diff = actual_speed_percentage - plc_target_percentage
+        speed_state = "UNKNOWN"
+
+        if abs(speed_diff) <= SPEED_TOLERANCE_PERCENT:
+            if plc_target_percentage == 0:
+                speed_state = "IDLE"
+            else:
+                speed_state = "RUNNING_OPTIMAL"
+        
+        elif speed_diff < -SPEED_TOLERANCE_PERCENT:
+            if plc_target_percentage > 0 and actual_speed_percentage <= 5.0:
+                speed_state = "CRITICAL_JAM_OR_MOTOR_FAIL"
+            else:
+                speed_state = "UNDER_PERFORMING_CHECK_LOAD"
+                
+        elif speed_diff > SPEED_TOLERANCE_PERCENT:
+            if plc_target_percentage == 0 and actual_speed_percentage > 5.0:
+                speed_state = "MANUAL_OVERRIDE_OR_FREEWHEELING"
+            else:
+                speed_state = "OVER_SPEEDING_CALIBRATION_ERROR"
+
+        return {
+            "status": "success",
+            "correlation_state": speed_state,
+            "metrics": {
+                "plc_target_percentage": round(plc_target_percentage, 1),
+                "actual_speed_percentage": round(actual_speed_percentage, 1),
+                "actual_speed": round(actual_speed, 2),
+                "deviation_percentage": round(speed_diff, 1),
+                "max_speed_capacity": MAX_SPEED
+            },
+            "last_updated": last_speed_timestamp
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to calculate speed status: {str(e)}")
 
 # ==========================================
 # Inspection (Computer Vision) Endpoints
