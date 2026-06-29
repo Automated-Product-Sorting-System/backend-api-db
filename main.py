@@ -488,7 +488,7 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
 class SpeedCommand(BaseModel):
     speed_percentage: int = Field(..., ge=0, le=100, description="Speed percentage from 0 to 100")
     
-# ⚙️ Hardware Constants
+# Hardware Constants
 MAX_SPEED = 2.5            # Maximum speed in m/s
 SPEED_TOLERANCE_PERCENT = 5.0  # Allowed deviation percentage    
 
@@ -551,8 +551,8 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
         # Dual-Lookup: Extract actual speed and PLC registered speed independently
         for reading in telemetry_data:
             # Assumes the physical speed sensor ID is 'Speed_01' and sends data as 'speed'
-            if reading.get("sensor_id") == "Speed_01" and "belt_speed" in reading:
-                actual_speed = float(reading["belt_speed"])
+            if reading.get("sensor_id") == "Speed_01" and "speed_ms" in reading:
+                actual_speed = float(reading["speed_ms"])
                 last_speed_timestamp = reading.get("timestamp")
             
             # Extract the 8-bit speed value from the independent PLC record
@@ -567,7 +567,7 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
                  "max_speed_capacity": MAX_SPEED
              }
 
-        # Normalization (Math)
+        # Normalization
         plc_target_percentage = (plc_speed_raw / 255.0) * 100.0
         actual_speed_percentage = (actual_speed / MAX_SPEED) * 100.0
 
@@ -575,7 +575,7 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
         plc_target_percentage = min(plc_target_percentage, 100.0)
         actual_speed_percentage = min(actual_speed_percentage, 100.0)
 
-        # 3. Smart Correlation Engine
+        # Smart Correlation Engine
         speed_diff = actual_speed_percentage - plc_target_percentage
         speed_state = "UNKNOWN"
 
