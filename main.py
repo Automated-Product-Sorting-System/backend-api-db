@@ -10,6 +10,7 @@ from passlib.context import CryptContext
 import paho.mqtt.publish as publish
 import json
 import os
+import math
 import threading
 import uvicorn
 import asyncio
@@ -665,17 +666,43 @@ def reject_and_delete(
         "message": f"Inspection {inspection_id} image deleted from cloud."
     }
 
-@app.get("/inspections/pending-review", response_model=list[schemas.InspectionResponse])
-def get_pending_inspections(db: Session = Depends(get_db)):
+@app.get("/inspections/pending-review", response_model=schemas.PaginatedInspectionResponse)
+def get_pending_inspections(
+    page: int = Query(1, ge=1, description="Current page number"),
+    size: int = Query(9, ge=1, le=100, description="Number of images per page"),
+    db: Session = Depends(get_db)):
     """
     Returns a list of inspections that have images need to be reviewed.
     """
-    # SQL Query: SELECT * FROM inspections WHERE cv_image_url IS NOT NULL;
-    pending_reviews = db.query(models.Inspection).filter(
+    # Main query that fetches all inspections that have images need review
+    base_query = db.query(models.Inspection).filter(
         models.Inspection.cv_image_url.isnot(None)
-    ).all()
+    )
     
-    return pending_reviews
+    # Calculate total image count and pages
+    total_count = base_query.count()
+    total_pages = math.ceil(total_count / size) if total_count > 0 else 1
+    
+    # Calculate the offset for the current page
+    skip = (page - 1) * size
+    
+    # Fetch data for the current page only (ordered by oldest first)
+    pending_reviews = base_query.order_by(
+        models.Inspection.inspected_at.asc()
+    ).offset(skip).limit(size).all()
+    
+    # Return the paginated results
+    return {
+        "data": pending_reviews,
+        "meta": {
+            "current_page": page,
+            "page_size": size,
+            "total_count": total_count,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1
+        }
+    }
 
 # ==========================================
 # Telemetry (InfluxDB) Endpoints
