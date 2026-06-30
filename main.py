@@ -10,6 +10,7 @@ from passlib.context import CryptContext
 import paho.mqtt.publish as publish
 import json
 import os
+import polars as pl
 import math
 import threading
 import uvicorn
@@ -21,7 +22,7 @@ from core.utils import upload_image, move_cloudinary_asset, delete_cloudinary_as
 from databases import models
 from databases import schemas
 from databases.postgres_conn import engine, get_db, SessionLocal
-from databases.influx_conn import get_latest_telemetry
+from databases.influx_conn import get_latest_telemetry, get_telemetry_for_day
 import mqtt_subscriber
 
 # ==========================================
@@ -480,6 +481,96 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch motor status: {str(e)}")
+
+
+@app.get("/motor/timeline")
+def get_motor_timeline(
+    date: str = Query(..., description="Date in YYYY-MM-DD format"),
+    current_session: models.SystemSession = Depends(get_current_session)
+):
+    """
+    Fetches raw telemetry for a specific day and compresses it into a contiguous timeline of system states.
+    """
+    try:
+        # Fetch raw telemetry for the specified day
+        raw_data = get_telemetry_for_day(date)
+        
+        if not raw_data:
+            return {"status": "success", "date": date, "timeline": []}
+
+        # Convert raw data to Polars DataFrame for efficient processing
+        df = pl.DataFrame(raw_data)
+        
+        # Separate the data into current and plc_status columns
+        df_current = df.filter(pl.col("field") == "current").select([
+            pl.col("time"),
+            pl.col("value").cast(pl.Float64).alias("current")])
+        
+        df_plc = df.filter(pl.col("field") == "plc_status").select([
+            pl.col("time"),
+            pl.col("value").cast(pl.String).alias("plc_status")])
+        
+        # In case there is no data available for either column
+        if df_current.is_empty() or df_plc.is_empty():
+             return {"status": "success", "date": date, "timeline": []}
+
+        # Order the combined DataFrame by time and fill null values
+        df_combined = pl.concat([df_current, df_plc], how="diagonal").sort("time")
+        
+        df_filled = df_combined.with_columns([
+            pl.col("current").fill_null(strategy="forward"),
+            pl.col("plc_status").fill_null(strategy="forward")
+        ]).drop_nulls() # Drop the first rows with null values
+        
+        if df_filled.is_empty():
+            return {"status": "success", "date": date, "timeline": []}
+
+        # Apply state logic (without OFFLINE state for now)
+        df_states = df_filled.with_columns(
+            pl.when((pl.col("plc_status") == "START") & (pl.col("current") > 0.5)).then(pl.lit("RUNNING"))
+            .when((pl.col("plc_status") == "STOP") & (pl.col("current") <= 0.5)).then(pl.lit("STOPPED"))
+            .otherwise(pl.lit("ERROR")).alias("state")
+        )
+        
+        # Compress the timeline into contiguous blocks (Time-Block Aggregation)
+        # Give a unique ID to each contiguous block of the same state
+        df_blocks = df_states.with_columns(
+            (pl.col("state") != pl.col("state").shift()).fill_null(False).cum_sum().alias("block_id")
+        )
+        
+        # Group by the block ID and aggregate the start and end times
+        timeline = df_blocks.group_by("block_id", maintain_order=True).agg([
+            pl.col("state").first(),
+            pl.col("time").first().alias("start_time"),
+            pl.col("time").last().alias("end_time")
+        ])
+        
+        raw_timeline = timeline.select(["state", "start_time", "end_time"]).to_dicts()
+        
+        # Inject OFFLINE periods (Gap Analysis)
+        final_timeline = []
+        for i in range(len(raw_timeline)):
+            if i > 0:
+                prev_end = raw_timeline[i-1]["end_time"]
+                curr_start = raw_timeline[i]["start_time"]
+                
+                # Check if there is a gap longer than 10 seconds
+                if (curr_start - prev_end).total_seconds() > 10:
+                    final_timeline.append({
+                        "state": "OFFLINE",
+                        "start_time": prev_end,
+                        "end_time": curr_start
+                    })
+            final_timeline.append(raw_timeline[i])
+        
+        return {
+            "status": "success", 
+            "date": date, 
+            "timeline": final_timeline
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate timeline: {str(e)}")
 
 # ==============================================
 # Belt Speed Control & Display Speed Endpoints

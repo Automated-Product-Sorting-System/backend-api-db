@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 from influxdb_client.client.influxdb_client import InfluxDBClient
 from influxdb_client.client.write_api import SYNCHRONOUS, WriteOptions
 
@@ -54,3 +55,38 @@ def get_latest_telemetry():
             
     # Return the values as a list of dictionaries for the WebSocket JSON
     return list(sensors_dict.values())
+
+def get_telemetry_for_day(date_str: str):
+    """
+    Fetches raw 'current' and 'plc_status' telemetry for a specific date (YYYY-MM-DD).
+    Returns a flat list of dictionaries optimized for Polars DataFrame ingestion.
+    """
+    # Convert the date string to start and end datetime objects for the day
+    start_dt = datetime.strptime(date_str, "%Y-%m-%d")
+    end_dt = start_dt + timedelta(days=1)
+    
+    start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    # The Query to fetch current and PLC status readings for the day
+    query = f'''
+        from(bucket: "{INFLUXDB_BUCKET}")
+        |> range(start: {start_iso}, stop: {end_iso})
+        |> filter(fn: (r) => r._measurement == "SensorData")
+        |> filter(fn: (r) => r._field == "plc_status" or r._field == "current")
+        |> keep(columns: ["_time", "_field", "_value"])
+    '''
+    
+    tables = query_api.query(query)
+    
+    raw_data = []
+    # Convert the returned tables to a flat list of dictionaries
+    for table in tables:
+        for record in table.records:
+            raw_data.append({
+                "time": record.get_time(),
+                "field": record.get_field(),
+                "value": record.get_value()
+            })
+            
+    return raw_data

@@ -81,7 +81,15 @@ def on_message(client, userdata, msg):
                     for field, value in item.items():
                         if field in ["sensor_id", "timestamp"]:
                             continue
-                        point.field(field, float(value))
+                        # Applying Defensive Programming to protect against data type errors
+                        try:
+                            # Trying converting the value to a float
+                            numeric_val = float(value)
+                            point.field(field, numeric_val)
+                        except (ValueError, TypeError):
+                            # If conversion fails, keep the value as a string
+                            point.field(field, str(value))
+                            
                         has_fields = True
                         
                     if has_fields:
