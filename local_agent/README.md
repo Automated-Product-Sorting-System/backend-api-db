@@ -8,7 +8,7 @@ Since the Cloud API cannot directly communicate with local factory networks due 
 It operates with a **Stateful, Two-Way Architecture (Closed-Loop)**:
 
 1. **Downstream (Command Execution):** It subscribes to the Cloud MQTT Broker (`factory/plc/commands`) and listens for operational commands sent from the UI:
-   - **START/STOP Commands:** Translates these commands into **Modbus TCP Coil 0** writes (Mapped to PLC physical output `Q0.0`) to physically start or halt the conveyor motor.
+   - **START/STOP Commands:** Translates these commands into **Modbus TCP Coil 0** writes (Mapped to PLC physical output `Q0.0`) to physically start or stop the conveyor motor.
    - **Speed Control (`SET_SPEED`):** Receives a speed percentage (0-100%) from the UI, scales it mathematically to an 8-bit digital value (0-255), and pushes it to the PLC via **Modbus TCP Holding Register 10** (Mapped to PLC address `40011`).
 
 2. **Upstream (Telemetry & State Sync):** It runs a background thread that continuously polls the PLC's actual logical state via Modbus TCP every second. It reads:

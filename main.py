@@ -459,13 +459,13 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
             motor_state = "OFFLINE"
             current_value = 0.0
         else:
-            if plc_status == "START" and current_value > 0.5:
+            if plc_status == "START" and current_value > 0.1:
                 motor_state = "RUNNING"
-            elif plc_status == "STOP" and current_value <= 0.5:
+            elif plc_status == "STOP" and current_value <= 0.1:
                 motor_state = "STOPPED"
-            elif plc_status == "START" and current_value <= 0.5:
+            elif plc_status == "START" and current_value <= 0.1:
                 motor_state = "FAULT_NO_LOAD"
-            elif plc_status == "STOP" and current_value > 0.5:
+            elif plc_status == "STOP" and current_value > 0.1:
                 motor_state = "FAULT_MANUAL_OVERRIDE"
             else:
                 motor_state = "UNKNOWN_STATE"
@@ -527,8 +527,8 @@ def get_motor_timeline(
 
         # Apply state logic (without OFFLINE state for now)
         df_states = df_filled.with_columns(
-            pl.when((pl.col("plc_status") == "START") & (pl.col("current") > 0.5)).then(pl.lit("RUNNING"))
-            .when((pl.col("plc_status") == "STOP") & (pl.col("current") <= 0.5)).then(pl.lit("STOPPED"))
+            pl.when((pl.col("plc_status") == "START") & (pl.col("current") > 0.1)).then(pl.lit("RUNNING"))
+            .when((pl.col("plc_status") == "STOP") & (pl.col("current") <= 0.1)).then(pl.lit("STOPPED"))
             .otherwise(pl.lit("ERROR")).alias("state")
         )
         
@@ -580,8 +580,8 @@ class SpeedCommand(BaseModel):
     speed_percentage: int = Field(..., ge=0, le=100, description="Speed percentage from 0 to 100")
     
 # Hardware Constants
-MAX_SPEED = 2.5            # Maximum speed in m/s
-SPEED_TOLERANCE_PERCENT = 5.0  # Allowed deviation percentage    
+MAX_SPEED = 0.23            # Maximum speed in m/s
+SPEED_TOLERANCE_PERCENT = 15.0  # Allowed deviation percentage    
 
 @app.post("/belt/speed")
 def set_belt_speed(
