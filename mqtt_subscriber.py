@@ -14,8 +14,7 @@ from databases.influx_conn import influx_client
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -40,6 +39,12 @@ def on_connect(client, userdata, flags, rc, properties=None):
     else:
         logger.error(f"Connection failed with return code: {rc}")
 
+def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
+    if reason_code == 0:
+        logger.info("Disconnected gracefully from MQTT Broker.")
+    else:
+        logger.warning(
+            f"Unexpectedly disconnected from MQTT Broker. Reason code: {reason_code}")
 
 def on_message(client, userdata, msg):
     try:
@@ -50,14 +55,24 @@ def on_message(client, userdata, msg):
         if topic == STATUS_TOPIC:
             plc_status = payload.get("status", "UNKNOWN")
             speed_register = payload.get("speed_register", 0)
+            timestamp = payload.get("timestamp")
+            
             
             # Create InfluxDB point
             point = Point("SensorData").tag("sensor_id", "PLC")
             point.field("plc_status", plc_status)
             point.field("speed_register", int(speed_register))
             
-            influx_client.write(record=point)
-            logger.info(f"PLC status persisted: {plc_status} | Speed Reg: {speed_register}")
+            if timestamp:
+                try:
+                    point.time(timestamp)
+                except Exception:
+                    logger.warning(f"Invalid timestamp received for PLC: {timestamp}")
+            try:
+                influx_client.write(record=point)
+                logger.info(f"PLC status persisted: {plc_status} | Speed Reg: {speed_register}")
+            except Exception as e:
+                logger.error(f"Failed to write PLC status to InfluxDB: {e}")
             return 
 
         # Message from ESP
@@ -68,12 +83,16 @@ def on_message(client, userdata, msg):
                     timestamp = item.get("timestamp")
                     
                     if not sensor_id:
+                        logger.warning("Received sensor reading without sensor_id. Skipping.")
                         continue 
 
                     point = Point("SensorData").tag("sensor_id", sensor_id)
                     
                     if timestamp:
-                        point.time(timestamp)
+                        try:
+                            point.time(timestamp)
+                        except Exception:
+                            logger.warning(f"Invalid timestamp received from sensor '{sensor_id}': {timestamp}")
                     
                     has_fields = False
                     
@@ -93,7 +112,11 @@ def on_message(client, userdata, msg):
                         has_fields = True
                         
                     if has_fields:
-                        influx_client.write(record=point)
+                        try:
+                            influx_client.write(record=point)
+                        except Exception as e:
+                            logger.error(f"Failed to write sensor '{sensor_id}' to InfluxDB: {e}")
+                            continue
                 
                 logger.info("Batch of independent sensor readings processed.")
             else:
@@ -108,7 +131,11 @@ def on_message(client, userdata, msg):
 def main():
     client = mqtt.Client(callback_api_version=CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
+    
+    # Automatic reconnect with exponential backoff
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
    
     if MQTT_USERNAME and MQTT_PASSWORD:
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -125,7 +152,7 @@ def main():
     except Exception as e:
         logger.critical(f"MQTT Service crashed unexpectedly: {str(e)}")
     finally:
-        logger.info("Flushing remaining InfluxDB batch writes...")
+        logger.info("MQTT Subscriber has been shut down.")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from typing import Optional
 from passlib.context import CryptContext
 import paho.mqtt.publish as publish
 import json
+import time
 import os
 import polars as pl
 import math
@@ -36,8 +37,15 @@ async def lifespan(app: FastAPI):
     print("Database Tables Verified.")
     
     # Start mqtt_subscriber in a background thread
-    mqtt_thread = threading.Thread(target=mqtt_subscriber.main, daemon=True)
-    mqtt_thread.start()
+    def start_mqtt():
+        while True:
+            try:
+                mqtt_subscriber.main()
+            except Exception as e:
+                print(f"MQTT subscriber crashed: {e}")
+                time.sleep(5)
+                
+    threading.Thread(target=start_mqtt, daemon=True).start()            
     print("MQTT Subscriber is running in the background.")
     
     yield # Server is running 
