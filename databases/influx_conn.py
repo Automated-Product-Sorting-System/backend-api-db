@@ -1,8 +1,8 @@
 import os
+import polars as pl
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from influxdb_client.client.influxdb_client import InfluxDBClient
-from influxdb_client.client.write_api import SYNCHRONOUS, WriteOptions
+from influxdb_client_v3 import InfluxDBClient3
 
 load_dotenv()
 
@@ -14,47 +14,35 @@ INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "")
 if not INFLUXDB_TOKEN or not INFLUXDB_URL:
     raise ValueError("InfluxDB configuration is missing in .env file!")
 
-client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
-write_api = client.write_api(write_options=SYNCHRONOUS)
-batch_options = WriteOptions(batch_size=50, flush_interval=1000, jitter_interval=200, retry_interval=5000, max_retries=3)
-batch_write_api = client.write_api(write_options=batch_options)
-query_api = client.query_api()
+influx_client = InfluxDBClient3(
+    host=INFLUXDB_URL,
+    token=INFLUXDB_TOKEN,
+    org=INFLUXDB_ORG,
+    database=INFLUXDB_BUCKET
+)
 
 def get_latest_telemetry():
     """
     Fetches the latest sensor readings from InfluxDB and dynamically aggregates them into a single dictionary per sensor_id.
     """
-    query = f'''
-        from(bucket: "{INFLUXDB_BUCKET}")
-        |> range(start: -1h)
-        |> filter(fn: (r) => r._measurement == "SensorData")
-        |> last()
-    '''
-    tables = query_api.query(query)
+    query = """
+        SELECT * FROM (
+            SELECT *, ROW_NUMBER() OVER(PARTITION BY "sensor_id" ORDER BY "time" DESC) as rn
+            FROM "SensorData"
+            WHERE "time" >= now() - INTERVAL '1 hour'
+        ) WHERE rn = 1
+    """
     
-    # Dictionary to group all sensor readings under their respective sensor_id
-    sensors_dict = {}
+    table = influx_client.query(query=query, language="sql")
+    data = table.to_pylist()
     
-    for table in tables:
-        for record in table.records:
-            s_id = record.values.get("sensor_id")
+    for row in data:
+        if "time" in row:
+            row["timestamp"] = row.pop("time").isoformat()
+        if "rn" in row:
+            del row["rn"]
             
-            # If this is the first field read for this sensor_id, initialize its dictionary
-            if s_id not in sensors_dict:
-                sensors_dict[s_id] = {
-                    "sensor_id": s_id,
-                    "timestamp": record.get_time().isoformat()
-                }
-            
-            # Extract the field name (temperature, current, vibration_x, ...) and its value
-            field_name = record.get_field()
-            field_value = record.get_value()
-            
-            # Add the field to the dictionary associated with the same sensor_id
-            sensors_dict[s_id][field_name] = field_value
-            
-    # Return the values as a list of dictionaries for the WebSocket JSON
-    return list(sensors_dict.values())
+    return data
 
 def get_telemetry_for_day(date_str: str):
     """
@@ -65,28 +53,48 @@ def get_telemetry_for_day(date_str: str):
     start_dt = datetime.strptime(date_str, "%Y-%m-%d")
     end_dt = start_dt + timedelta(days=1)
     
-    start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Convert to ISO format for SQL query
+    start_iso = start_dt.strftime("%Y-%m-%d 00:00:00")
+    end_iso = end_dt.strftime("%Y-%m-%d 00:00:00")
     
-    # The Query to fetch current and PLC status readings for the day
-    query = f'''
-        from(bucket: "{INFLUXDB_BUCKET}")
-        |> range(start: {start_iso}, stop: {end_iso})
-        |> filter(fn: (r) => r._measurement == "SensorData")
-        |> filter(fn: (r) => r._field == "plc_status" or r._field == "current")
-        |> keep(columns: ["_time", "_field", "_value"])
-    '''
+    # Current sensor readings only
+    current_query = f"""
+        SELECT time, current
+        FROM "SensorData"
+        WHERE time >= '{start_iso}' AND time < '{end_iso}'
+          AND sensor_id = 'Curr_01'
+          AND current IS NOT NULL
+        ORDER BY time ASC
+    """
     
-    tables = query_api.query(query)
+    # PLC status readings only
+    plc_query = f"""
+        SELECT time, plc_status
+        FROM "SensorData"
+        WHERE time >= '{start_iso}' AND time < '{end_iso}'
+          AND sensor_id = 'PLC'
+          AND plc_status IS NOT NULL
+        ORDER BY time ASC
+    """
     
-    raw_data = []
-    # Convert the returned tables to a flat list of dictionaries
-    for table in tables:
-        for record in table.records:
-            raw_data.append({
-                "time": record.get_time(),
-                "field": record.get_field(),
-                "value": record.get_value()
-            })
-            
-    return raw_data
+    current_table = influx_client.query(query=current_query, language="sql")
+    plc_table = influx_client.query(query=plc_query, language="sql")
+
+    current_rows = current_table.to_pylist()
+    plc_rows = plc_table.to_pylist()
+
+    if not current_rows:
+        return []
+
+    current_df = pl.DataFrame(current_rows).sort("time")
+
+    if not plc_rows:
+        # No PLC status recorded that day; still return current readings
+        return current_df.with_columns(pl.lit(None).alias("plc_status")).to_dicts()
+
+    plc_df = pl.DataFrame(plc_rows).sort("time")
+
+    # As-of backward join: for each 'current' timestamp, attach the last known 'plc_status' at or before that moment
+    merged_df = current_df.join_asof(plc_df, on="time", strategy="backward")
+
+    return merged_df.to_dicts()

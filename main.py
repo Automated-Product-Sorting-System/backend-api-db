@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 from uuid import UUID
 from typing import Optional
@@ -15,7 +16,6 @@ import math
 import threading
 import uvicorn
 import asyncio
-import uuid
 
 # Internal imports
 from core.utils import upload_image, move_cloudinary_asset, delete_cloudinary_asset
@@ -83,7 +83,7 @@ def get_current_session(
     """
     session = db.query(models.SystemSession).filter(
         models.SystemSession.session_id == x_session_id,
-        models.SystemSession.expires_at > datetime.now()
+        models.SystemSession.expires_at > datetime.now(timezone.utc)
     ).first()
     
     if not session:
@@ -100,8 +100,8 @@ def home():
     return {"status": "Online"}
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=3, max_length=30)
+    password: str = Field(min_length=8, max_length=128)
 
 @app.post("/login")
 def login(request: LoginRequest, db: Session = Depends(get_db)):
@@ -114,18 +114,37 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Wrong username or password")
     
+    if not user.is_active:
+        raise HTTPException(status_code=403,detail="This account has been deactivated. Please contact the administrator.")
+    
+    # Terminate previous sessions
+    db.query(models.SystemSession).filter(
+    models.SystemSession.user_id == user.user_id,
+    models.SystemSession.expires_at > datetime.now(timezone.utc)
+    ).update({"expires_at": datetime.now(timezone.utc)},synchronize_session=False)
+
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while terminating previous sessions")
+
     # Define session expiration (e.g., 8 hours)
-    expiration_time = datetime.now() + timedelta(hours=8)
+    expiration_time = datetime.now(timezone.utc) + timedelta(hours=8)
     
     # Create a new session
     new_session = models.SystemSession(
-        user_id=user.user_id, 
+        user_id=user.user_id,
         expires_at=expiration_time)
     
-    db.add(new_session)
-    db.commit()
-    db.refresh(new_session)
-    
+    try:
+        db.add(new_session)
+        db.commit()
+        db.refresh(new_session)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while creating session")
+
     return {
         "message": "Login successful",
         "session_id": new_session.session_id,
@@ -139,22 +158,31 @@ def create_user(request: schemas.UserCreate, db: Session = Depends(get_db)):
     # Hash the password before saving it to the database
     hashed_password = get_password_hash(request.password)
     
-    users_count = db.query(models.User).count()
-    
-    if users_count == 0:
+    first_user = db.query(models.User).first()
+
+    if first_user is None:
         assigned_role = schemas.UserRole.Admin  # First user is always an admin
     else:
         assigned_role = schemas.UserRole.Viewer  # Subsequent users are viewers
+        
+    existing_user = (db.query(models.User).filter(models.User.username == request.username).first())
+
+    if existing_user:
+        raise HTTPException(status_code=400,detail="Username already exists")    
     
     new_user = models.User(
         username=request.username,
         password_hash=hashed_password,  # Store the hashed password
         user_role=assigned_role
     )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while creating user")
+
     return {"message": "User created successfully", "user_id": new_user.user_id}
 
 @app.post("/logout")
@@ -163,9 +191,13 @@ def logout(
     db: Session = Depends(get_db)
 ):
     # Expire the current session
-    current_session.expires_at = datetime.now()
-    db.commit()
-    
+    current_session.expires_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while logging out")
+
     return {"message": "Logged out successfully"}
 
 # ==========================================
@@ -173,8 +205,8 @@ def logout(
 # ==========================================
 
 class AdminCreateUserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=3, max_length=30)
+    password: str = Field(min_length=8, max_length=128)
     user_role: schemas.UserRole  # Admin, Operator, or Viewer
 
 @app.post("/admin/create-user")
@@ -204,10 +236,14 @@ def admin_create_user(
         user_role=request.user_role
     )
     
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while creating user")
+
     return {
         "message": f"User '{request.username}' created successfully as {request.user_role.value}", 
         "user_id": new_user.user_id,
@@ -219,10 +255,10 @@ def admin_create_user(
 # ==========================================
 
 class EditPasswordRequest(BaseModel):
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 class EditUsernameRequest(BaseModel):
-    new_username: str
+    new_username: str = Field(min_length=3, max_length=30)
 
 class EditRoleRequest(BaseModel):
     new_role: schemas.UserRole  # (Admin, Operator or Viewer)
@@ -250,7 +286,11 @@ def edit_password(
     hashed_new_password = get_password_hash(request.new_password)
     user_to_edit.password_hash = hashed_new_password
     
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while updating password")
 
     return {"message": "Password updated successfully"}
 
@@ -279,7 +319,11 @@ def edit_username(
         raise HTTPException(status_code=400, detail="Username already exists")
 
     user_to_edit.username = request.new_username
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while updating username")
 
     return {"message": "Username updated successfully"}
 
@@ -300,8 +344,23 @@ def edit_role(
     if not user_to_edit:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Prevent removing the last Admin
+    if (user_to_edit.user_role == schemas.UserRole.Admin and request.new_role != schemas.UserRole.Admin):
+        admin_count = db.query(models.User).filter(
+        models.User.user_role == schemas.UserRole.Admin).count()
+
+        if admin_count <= 1:
+            raise HTTPException(
+            status_code=400,
+            detail="At least one Admin account must remain in the system."
+        )
+    
     user_to_edit.user_role = request.new_role
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while updating role")
 
     return {"message": f"Role updated successfully to {request.new_role}"}
 
@@ -330,9 +389,23 @@ def delete_user(
     if not user_to_delete:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Prevent deleting the last Admin
+    if user_to_delete.user_role == schemas.UserRole.Admin:
+        admin_count = db.query(models.User).filter(
+        models.User.user_role == schemas.UserRole.Admin).count()
+
+        if admin_count <= 1:
+            raise HTTPException(
+            status_code=400,
+            detail="At least one Admin account must remain in the system.")
+    
     # Delete the user (Cascade delete will automatically handle their sessions in PostgreSQL)
-    db.delete(user_to_delete)
-    db.commit()
+    try:
+        db.delete(user_to_delete)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while deleting user")
 
     return {"message": f"User {user_to_delete.username} deleted successfully"}
 
@@ -370,7 +443,7 @@ def get_all_sessions(
 # ==================================================
 
 class MotorCommand(BaseModel):
-    command: str 
+    command: schemas.MotorCommandType 
 
 @app.post("/motor/control")
 def control_motor(
@@ -485,7 +558,7 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
 
 @app.get("/motor/timeline")
 def get_motor_timeline(
-    date: str = Query(..., description="Date in YYYY-MM-DD format"),
+    target_date: date = Query(..., alias="date", description="Date in YYYY-MM-DD format"),
     current_session: models.SystemSession = Depends(get_current_session)
 ):
     """
@@ -493,40 +566,19 @@ def get_motor_timeline(
     """
     try:
         # Fetch raw telemetry for the specified day
-        raw_data = get_telemetry_for_day(date)
+        raw_data = get_telemetry_for_day(target_date.isoformat())
         
         if not raw_data:
-            return {"status": "success", "date": date, "timeline": []}
+            return {"status": "success", "date": target_date.isoformat(), "timeline": []}
 
         # Convert raw data to Polars DataFrame for efficient processing
         df = pl.DataFrame(raw_data)
-        
-        # Separate the data into current and plc_status columns
-        df_current = df.filter(pl.col("field") == "current").select([
-            pl.col("time"),
-            pl.col("value").cast(pl.Float64).alias("current")])
-        
-        df_plc = df.filter(pl.col("field") == "plc_status").select([
-            pl.col("time"),
-            pl.col("value").cast(pl.String).alias("plc_status")])
-        
-        # In case there is no data available for either column
-        if df_current.is_empty() or df_plc.is_empty():
-             return {"status": "success", "date": date, "timeline": []}
 
-        # Order the combined DataFrame by time and fill null values
-        df_combined = pl.concat([df_current, df_plc], how="diagonal").sort("time")
-        
-        df_filled = df_combined.with_columns([
-            pl.col("current").fill_null(strategy="forward"),
-            pl.col("plc_status").fill_null(strategy="forward")
-        ]).drop_nulls() # Drop the first rows with null values
-        
-        if df_filled.is_empty():
-            return {"status": "success", "date": date, "timeline": []}
+        if df.is_empty():
+            return {"status": "success", "date": target_date.isoformat(), "timeline": []}
 
-        # Apply state logic (without OFFLINE state for now)
-        df_states = df_filled.with_columns(
+        # Apply state logic directly!
+        df_states = df.with_columns(
             pl.when((pl.col("plc_status") == "START") & (pl.col("current") > 0.1)).then(pl.lit("RUNNING"))
             .when((pl.col("plc_status") == "STOP") & (pl.col("current") <= 0.1)).then(pl.lit("STOPPED"))
             .otherwise(pl.lit("ERROR")).alias("state")
@@ -565,7 +617,7 @@ def get_motor_timeline(
         
         return {
             "status": "success", 
-            "date": date, 
+            "date": target_date.isoformat(), 
             "timeline": final_timeline
         }
 
@@ -606,10 +658,7 @@ def set_belt_speed(
         # Send speed command and percentage via MQTT
         publish.single(
             topic="factory/plc/commands",
-            payload=json.dumps({
-                "command": "SET_SPEED", 
-                "value": request.speed_percentage
-            }),
+            payload=json.dumps({"command": "SET_SPEED", "value": request.speed_percentage}),
             hostname=broker,
             port=port,
             auth=auth_dict,
@@ -727,7 +776,7 @@ def background_upload_task(inspection_id: int, image_bytes: bytes):
         db.close() # Close the connection to prevent resource leaks (Memory Leak)
 
 class InspectionConfirmRequest(BaseModel):
-    status: str         
+    status: schemas.InspectionStatus         
     defect_type: str | None = None    # Accepts nulls if status is Good
 
 # CONFIDENCE_THRESHOLD = 0.85
@@ -736,7 +785,7 @@ class InspectionConfirmRequest(BaseModel):
 async def create_automated_inspection(
     background_tasks: BackgroundTasks,      # Inject background tasks service
     sensor_id: str = Form(...),
-    status: str = Form(...),
+    status: schemas.InspectionStatus = Form(...),
     defect_type: str = Form(None),
     confidence_score: float = Form(...),
     image_file: UploadFile = File(None),
@@ -755,6 +804,12 @@ async def create_automated_inspection(
     if image_file:
         image_bytes = await image_file.read()
 
+    if (status == schemas.InspectionStatus.Good and defect_type is not None):
+        raise HTTPException(status_code=400, detail="A Good inspection cannot have a defect type.")
+
+    if (status == schemas.InspectionStatus.Defected and not defect_type):
+        raise HTTPException(status_code=400, detail="Defect type is required when status is Defected.")
+    
     # Create the inspection record with a temporary flag until background upload completes
     new_inspection = models.Inspection(
         user_id=None,
@@ -765,9 +820,13 @@ async def create_automated_inspection(
         cv_image_url="uploading_in_background" if image_bytes else None
     )
 
-    db.add(new_inspection)
-    db.commit()
-    db.refresh(new_inspection)
+    try:
+        db.add(new_inspection)
+        db.commit()
+        db.refresh(new_inspection)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while creating inspection")
 
     # Queue the image for background upload and return response immediately
     if image_bytes:
@@ -798,6 +857,12 @@ def edit_inspection(
             detail="Viewers are not allowed to confirm or modify inspections."
         )
 
+    if (request.status == schemas.InspectionStatus.Good and request.defect_type is not None):
+        raise HTTPException(status_code=400, detail="A Good inspection cannot have a defect type.")
+
+    if (request.status == schemas.InspectionStatus.Defected and not request.defect_type):
+        raise HTTPException(status_code=400, detail="Defect type is required when status is Defected.")
+    
     inspection = db.query(models.Inspection).filter(
         models.Inspection.inspection_id == inspection_id
     ).first()
@@ -819,7 +884,11 @@ def edit_inspection(
         if new_cloud_url:
             inspection.cv_image_url = new_cloud_url
 
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while updating inspection")
 
     return {
         "message": "Data updated and image moved on Cloudinary",
@@ -852,7 +921,11 @@ def confirm_only(
         if new_cloud_url:
             inspection.cv_image_url = new_cloud_url
             
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while confirming inspection")
 
     return {
         "status": "success",
@@ -882,7 +955,11 @@ def reject_and_delete(
         delete_cloudinary_asset(inspection.cv_image_url)
         
     inspection.cv_image_url = None
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while deleting inspection image")
 
     return {
         "status": "success",
@@ -893,10 +970,16 @@ def reject_and_delete(
 def get_pending_inspections(
     page: int = Query(1, ge=1, description="Current page number"),
     size: int = Query(9, ge=1, le=100, description="Number of images per page"),
+    current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)):
     """
     Returns a list of inspections that have images need to be reviewed.
     """
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+
+    if not current_user or current_user.user_role == schemas.UserRole.Viewer:
+        raise HTTPException(status_code=403, detail="Only Admin and Operator can review inspections.")
+    
     # Main query that fetches all inspections that have images need review
     base_query = db.query(models.Inspection).filter(
         models.Inspection.cv_image_url.isnot(None)
@@ -955,7 +1038,7 @@ async def websocket_telemetry(
     # Check if the session is valid before accepting the connection
     session = db.query(models.SystemSession).filter(
         models.SystemSession.session_id == session_id,
-        models.SystemSession.expires_at > datetime.now()
+        models.SystemSession.expires_at > datetime.now(timezone.utc)
     ).first()
     
     if not session:
@@ -988,6 +1071,13 @@ def get_users(
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)
 ):
+    current_user = db.query(models.User).filter(
+        models.User.user_id == current_session.user_id
+    ).first()
+
+    if not current_user or current_user.user_role != schemas.UserRole.Admin:
+        raise HTTPException(status_code=403, detail="Only Admin can view all users.")
+    
     users = db.query(models.User).all()
     return users
 
@@ -997,9 +1087,19 @@ def get_user(
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)
 ):
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    if (current_user.user_role != schemas.UserRole.Admin and current_session.user_id != target_user_id):
+        raise HTTPException(status_code=403, detail="You can only view your own profile.")
+    
     user = db.query(models.User).filter(models.User.user_id == target_user_id).first()
+    
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
     return user
 
 @app.get("/inspections", response_model=list[schemas.InspectionResponse])
@@ -1037,12 +1137,17 @@ def get_inspections(
 # ==========================================
 
 @app.post("/sensors", response_model=schemas.SensorResponse)
-def create_sensor(sensor: schemas.SensorBase,
+def add_sensor(sensor: schemas.SensorBase,
                   current_session: models.SystemSession = Depends(get_current_session),
                   db: Session = Depends(get_db)):
     """
     Adding a new sensor or camera to the system
     """
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+
+    if not current_user or current_user.user_role != schemas.UserRole.Admin:
+        raise HTTPException(status_code=403, detail="Only Admin can add sensors.")
+    
     # Check if a sensor with the same ID already exists
     existing_sensor = db.query(models.Sensor).filter(models.Sensor.sensor_id == sensor.sensor_id).first()
     if existing_sensor:
@@ -1058,10 +1163,14 @@ def create_sensor(sensor: schemas.SensorBase,
         is_active=sensor.is_active
     )
     
-    db.add(new_sensor)
-    db.commit()
-    db.refresh(new_sensor)
-    return new_sensor
+    try:
+        db.add(new_sensor)
+        db.commit()
+        db.refresh(new_sensor)
+        return new_sensor
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while adding sensor")
 
 @app.get("/sensors", response_model=list[schemas.SensorResponse])
 def get_all_sensors(current_session: models.SystemSession = Depends(get_current_session), db: Session = Depends(get_db)):
@@ -1086,13 +1195,22 @@ def update_sensor_status(sensor_id: str, is_active: bool, current_session: model
     """
     Activate or deactivate a specific sensor (e.g., during maintenance)
     """
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+
+    if not current_user or current_user.user_role != schemas.UserRole.Admin:
+        raise HTTPException(status_code=403, detail="Only Admin can update sensor status.")
+    
     sensor = db.query(models.Sensor).filter(models.Sensor.sensor_id == sensor_id).first()
     if not sensor:
         raise HTTPException(status_code=404, detail="Sensor not found")
     
-    sensor.is_active = is_active
-    db.commit()
-    return {"message": f"Sensor {sensor_id} status updated to {'Active' if is_active else 'Inactive'}"}
+    try:
+        sensor.is_active = is_active
+        db.commit()
+        return {"message": f"Sensor {sensor_id} status updated to {'Active' if is_active else 'Inactive'}"}
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error occurred while updating sensor status")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)

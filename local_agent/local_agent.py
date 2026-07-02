@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 from pymodbus.client import ModbusTcpClient
 from dotenv import load_dotenv
 
@@ -25,7 +26,7 @@ PLC_IP = os.getenv("PLC_IP")
 PLC_PORT = int(os.getenv("PLC_PORT", 502))
 
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print("Connected to Cloud MQTT Broker!")
         print(f"Listening for commands on topic: {COMMAND_TOPIC}")
@@ -115,7 +116,7 @@ def publish_plc_status(mqtt_client):
 
 
 # Initialize MQTT Client
-client = mqtt.Client()
+client = mqtt.Client(callback_api_version=CallbackAPIVersion.VERSION2)
 if MQTT_USERNAME and MQTT_PASSWORD:
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 

@@ -17,14 +17,18 @@ class InspectionStatus(str, Enum):
     Good = "Good"
     Defected = "Defected"
 
+class MotorCommandType(str, Enum):
+    START = "START"
+    STOP = "STOP"
+
 # Users table
 class UserBase(BaseModel):
-    username: str
+    username: str = Field(min_length=3, max_length=30)
     user_role: UserRole
     is_active: bool = True
 
 class UserCreate(UserBase):
-    password: str 
+    password: str = Field(min_length=8, max_length=128)
 
 class UserResponse(UserBase):
     user_id: int
