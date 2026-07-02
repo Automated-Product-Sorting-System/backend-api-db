@@ -2,7 +2,7 @@ import os
 import polars as pl
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from influxdb_client_v3 import InfluxDBClient3
+from influxdb_client_3 import InfluxDBClient3
 
 load_dotenv()
 

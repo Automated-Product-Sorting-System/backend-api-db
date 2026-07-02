@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 from dotenv import load_dotenv
 import ssl
-from influxdb_client_v3 import Point
+from influxdb_client_3 import Point
 
 # Internal imports
 from databases.influx_conn import influx_client
