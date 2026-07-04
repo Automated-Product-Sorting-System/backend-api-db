@@ -979,6 +979,59 @@ def get_pending_inspections(
             "has_previous": page > 1
         }
     }
+    
+@app.get("/inspections/reviewed", response_model=schemas.PaginatedInspectionResponse)
+def get_reviewed_inspections(
+    page: int = Query(1, ge=1, description="Current page number"),
+    size: int = Query(9, ge=1, le=100, description="Number of images per page"),
+    status_filter: Optional[schemas.InspectionStatus] = Query(None, description="Filter by status (Good, Defected, Invalid)"),
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a list of inspections that have ALREADY been reviewed.
+    """
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
+
+    if not current_user or current_user.user_role == schemas.UserRole.Viewer:
+        raise HTTPException(status_code=403, detail="Only Admin and Operator can see reviewed inspections.")
+    
+    # Determine 3 days for images to appear in reviewed tab
+    time_threshold = datetime.now(timezone.utc) - timedelta(days=3)
+
+    # Fetch images that have been reviewed
+    base_query = db.query(models.Inspection).filter(
+        models.Inspection.cv_image_url.isnot(None),
+        models.Inspection.cv_image_url != "uploading_in_background",
+        models.Inspection.user_id.isnot(None),
+        models.Inspection.inspected_at >= time_threshold
+    )
+    
+    # 
+    if status_filter:
+        base_query = base_query.filter(models.Inspection.status == status_filter)
+    
+    # Calculate total image count and pages
+    total_count = base_query.count()
+    total_pages = math.ceil(total_count / size) if total_count > 0 else 1
+    skip = (page - 1) * size
+    
+    # Fetch data for the current page only (ordered by newest first)
+    reviewed_inspections = base_query.order_by(
+        models.Inspection.inspected_at.desc()
+    ).offset(skip).limit(size).all()
+    
+    return {
+        "data": reviewed_inspections,
+        "meta": {
+            "current_page": page,
+            "page_size": size,
+            "total_count": total_count,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1
+        }
+    }
 
 # ==========================================
 # Telemetry (InfluxDB) Endpoints
