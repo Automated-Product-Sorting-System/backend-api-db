@@ -107,6 +107,11 @@ def get_current_session(
 def home():
     return {"status": "Online"}
 
+@app.get("/health")
+@app.head("/health")
+def health_check():
+    return {"status": "healthy"}
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=30)
     password: str = Field(min_length=8, max_length=128)
