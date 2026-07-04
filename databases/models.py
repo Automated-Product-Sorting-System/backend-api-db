@@ -13,6 +13,7 @@ class UserRole(str, enum.Enum):
 class InspectionStatus(str, enum.Enum):
     Good = "Good"
     Defected = "Defected"
+    Invalid = "Invalid"
 
 
 # Users table

@@ -963,6 +963,10 @@ def reject_and_delete(
         delete_cloudinary_asset(inspection.cv_image_url)
         
     inspection.cv_image_url = None
+    
+    inspection.status = schemas.InspectionStatus.Invalid
+    inspection.defect_type = None
+    
     try:
         db.commit()
     except SQLAlchemyError:

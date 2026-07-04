@@ -16,6 +16,7 @@ class UserRole(str, Enum):
 class InspectionStatus(str, Enum):
     Good = "Good"
     Defected = "Defected"
+    Invalid = "Invalid"
 
 class MotorCommandType(str, Enum):
     START = "START"

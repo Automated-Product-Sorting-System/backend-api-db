@@ -1,5 +1,5 @@
 CREATE TYPE user_roles AS ENUM ('Admin', 'Operator', 'Viewer');
-CREATE TYPE inspection_status AS ENUM ('Good', 'Defected');
+CREATE TYPE inspection_status AS ENUM ('Good', 'Defected', 'Invalid');
 
 CREATE TABLE Users (
     user_id  SERIAL PRIMARY KEY,
