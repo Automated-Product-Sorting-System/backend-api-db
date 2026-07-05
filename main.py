@@ -1084,7 +1084,7 @@ async def websocket_telemetry(
             if data:
                 await websocket.send_json({"status": "success", "data": data})
             
-            await asyncio.sleep(1.0)  
+            await asyncio.sleep(3.0)  
     except WebSocketDisconnect:
         print(f"User {session.user_id} disconnected from live telemetry.")
     except Exception as e:

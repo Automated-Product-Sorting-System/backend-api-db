@@ -131,7 +131,7 @@ def publish_plc_status(mqtt_client):
         except Exception as e:
             logger.error(f"Error reading PLC status: {e}")
        
-        time.sleep(1)  # Read every 1 second
+        time.sleep(3)  # Read every 3 second
 
 
 # Initialize MQTT Client
