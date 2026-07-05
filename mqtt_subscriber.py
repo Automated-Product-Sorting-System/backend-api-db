@@ -90,9 +90,10 @@ def on_message(client, userdata, msg):
                     
                     if timestamp:
                         try:
-                            point.time(timestamp)
-                        except Exception:
-                            logger.warning(f"Invalid timestamp received from sensor '{sensor_id}': {timestamp}")
+                            parsed_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                            point.time(parsed_time)
+                        except Exception as e:
+                            logger.warning(f"Invalid timestamp received from sensor '{sensor_id}': {timestamp} - Error: {e}")
                     
                     has_fields = False
                     
