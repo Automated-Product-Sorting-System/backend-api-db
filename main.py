@@ -861,7 +861,7 @@ def confirm_inspection(
     old_cloud_url = inspection.cv_image_url
     
     if old_cloud_url and old_cloud_url != "uploading_in_background":
-        category = inspection.defect_type or inspection.status
+        category = inspection.defect_type or inspection.status.value
         new_cloud_url = move_cloudinary_asset(old_cloud_url, category)
         
         if new_cloud_url:
@@ -920,7 +920,7 @@ def edit_inspection(
 
     # Only move the image if it has already been uploaded (not in background queue)
     if old_cloud_url and old_cloud_url != "uploading_in_background":
-        new_category = request.defect_type or request.status
+        new_category = request.defect_type or request.status.value
         new_cloud_url = move_cloudinary_asset(old_cloud_url, new_category)
 
         if new_cloud_url:
