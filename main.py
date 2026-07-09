@@ -1105,9 +1105,7 @@ def get_users(
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)
 ):
-    current_user = db.query(models.User).filter(
-        models.User.user_id == current_session.user_id
-    ).first()
+    current_user = db.query(models.User).filter(models.User.user_id == current_session.user_id).first()
 
     if not current_user or current_user.user_role != schemas.UserRole.Admin:
         raise HTTPException(status_code=403, detail="Only Admin can view all users.")
@@ -1144,15 +1142,13 @@ def get_inspections(
 ):
     """
     Fetch inspections. Supports optional filtering by session_id.
-    If no session_id is provided, it returns the latest 100 inspections for performance safety.
+    If no session_id is provided, it returns the latest 600 inspections for performance safety.
     """
     query = db.query(models.Inspection)
 
     # If a session ID is provided, filter inspections by that session
     if session_id:
-        target_session = db.query(models.SystemSession).filter(
-            models.SystemSession.session_id == session_id
-        ).first()
+        target_session = db.query(models.SystemSession).filter(models.SystemSession.session_id == session_id).first()
         
         if not target_session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -1163,9 +1159,9 @@ def get_inspections(
             models.Inspection.inspected_at <= target_session.expires_at
         ).all()
 
-    # If no session ID is provided, return the latest 100 inspections
-    return query.order_by(models.Inspection.inspected_at.desc()).limit(100).all()
-    
+    # If no session ID is provided, return the latest 600 inspections
+    return query.order_by(models.Inspection.inspected_at.desc()).limit(600).all()
+
 # ==========================================
 # Sensors Configuration Endpoints
 # ==========================================
