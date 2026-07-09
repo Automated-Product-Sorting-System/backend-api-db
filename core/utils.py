@@ -2,6 +2,7 @@ import logging
 from dotenv import load_dotenv
 import cloudinary
 import cloudinary.uploader
+import cloudinary.api
 from cloudinary.utils import cloudinary_url
 
 # Configure logging for production environment
@@ -12,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables (Cloudinary SDK will automatically detect CLOUDINARY_URL)
+# Load environment variables
 load_dotenv()
 
 def extract_public_id(image_url):
@@ -59,11 +60,19 @@ def move_cloudinary_asset(image_url, new_category):
 
         # Extract the filename and prepare the new path
         filename = old_public_id.split('/')[-1]
-        new_public_id = f"Nexus_System/Confirmed/{new_category}/{filename}"
+        new_folder_path = f"Nexus_System/Confirmed/{new_category}"
+        new_public_id = f"{new_folder_path}/{filename}"
         
-        # Command to move the asset
+        # Change the image's URL (Public ID)
         response = cloudinary.uploader.rename(old_public_id, new_public_id)
-        logger.info(f"Successfully moved image to: {new_public_id}")
+        
+        # Move the asset to the new folder
+        try:
+            cloudinary.api.update(new_public_id, asset_folder=new_folder_path)
+        except Exception as api_err:
+            logger.warning(f"Could not update explicit asset_folder: {api_err}")
+
+        logger.info(f"Successfully moved image to URL: {new_public_id} and UI folder: {new_folder_path}")
         return response.get('secure_url')
         
     except Exception as e:
