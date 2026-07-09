@@ -107,10 +107,19 @@ class SensorChartResponse(BaseModel):
 
 # Schema for Pie/Bar Charts (e.g., PostgreSQL Inspection Aggregations)
 class DefectStat(BaseModel):
-    category: str  # e.g., "Good", "Scratch", "Dent"
+    category: str  
     count: int
 
 class InspectionChartResponse(BaseModel):
     timeframe_hours: int
     total_inspections: int
     stats: list[DefectStat]
+    
+class AIConfidenceStat(BaseModel):
+    category: str
+    average_confidence: float
+    sample_count: int
+
+class AIConfidenceResponse(BaseModel):
+    timeframe_days: int
+    stats: list[AIConfidenceStat]    

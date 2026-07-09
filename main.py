@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone, date
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -1241,6 +1242,56 @@ def update_sensor_status(sensor_id: str, is_active: bool, current_session: model
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Error occurred while updating sensor status")
+
+# =========================
+# Analytics Endpoints
+# =========================
+
+@app.get("/analytics/ai-confidence", response_model=schemas.AIConfidenceResponse)
+def get_ai_model_confidence(
+    days: int = Query(7, ge=1, le=30, description="Timeframe in days to analyze"),
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    """
+    Calculates the average confidence score of the AI model for each defect type, including 'Good' products, to populate a Radar Chart.
+    """
+    # Define the time window limit
+    time_threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    
+    # Query that aggregates and calculates in a single database step
+    results = db.query(
+        # If defected, get defect_type; if Good or Invalid, get the base status
+        func.coalesce(models.Inspection.defect_type, models.Inspection.status).alias("category"),
+        func.avg(models.Inspection.confidence_score).alias("avg_confidence"),
+        func.count(models.Inspection.inspection_id).alias("count")
+    ).filter(
+        models.Inspection.inspected_at >= time_threshold,
+        # Ignore any inspection record that lacks a confidence score
+        models.Inspection.confidence_score.isnot(None)
+    ).group_by(func.coalesce(models.Inspection.defect_type, models.Inspection.status)).all()
+    
+    # Format the data for the frontend response
+    stats = []
+    for row in results:
+        # Clean the enum string representation if it includes "InspectionStatus."
+        clean_category = str(row.category).replace("InspectionStatus.", "")
+        
+        # Convert to percentage and round to 1 decimal place (e.g., 0.952 -> 95.2)
+        raw_avg = float(row.avg_confidence)
+        formatted_confidence = round(raw_avg * 100, 1) if raw_avg <= 1 else round(raw_avg, 1)
+        
+        stats.append(schemas.AIConfidenceStat(
+            category=clean_category,
+            average_confidence=formatted_confidence,
+            sample_count=int(row.count)
+        ))
+        
+    return {
+        "timeframe_days": days,
+        "stats": stats
+    }
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
