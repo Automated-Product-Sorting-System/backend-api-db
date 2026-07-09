@@ -1292,6 +1292,54 @@ def get_ai_model_confidence(
         "stats": stats
     }
 
+@app.get("/analytics/hourly-defects", response_model=schemas.HourlyDefectResponse)
+def get_hourly_defect_trend(
+    current_session: models.SystemSession = Depends(get_current_session),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the count of defected items per hour for the last 24 hours.
+    """
+    # Calculate the cutoff time (24 hours ago, strictly truncated to the hour)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+    cutoff = cutoff.replace(minute=0, second=0, microsecond=0)
+
+    # Query PostgreSQL to group defected items by hour
+    results = db.query(
+        func.date_trunc('hour', models.Inspection.inspected_at).alias("hour_bucket"),
+        func.count(models.Inspection.inspection_id).alias("count")
+    ).filter(
+        models.Inspection.inspected_at > cutoff,
+        models.Inspection.status == schemas.InspectionStatus.Defected
+    ).group_by(func.date_trunc('hour', models.Inspection.inspected_at)).all()
+
+    # Convert database results into a dictionary for O(1) lookups {datetime: count}
+    # Handling timezone awareness to match the generated hours loop
+    db_data = {
+        row.hour_bucket.replace(tzinfo=timezone.utc): int(row.count) 
+        for row in results if row.hour_bucket
+    }
+
+    # Generate exactly 24 data points sequentially
+    trend = []
+    for i in range(24):
+        # Move forward hour by hour starting from the cutoff
+        current_hour = cutoff + timedelta(hours=i+1)
+        
+        # Retrieve the count if it exists, otherwise default to 0
+        count = db_data.get(current_hour, 0)
+        
+        trend.append(schemas.HourlyDefectStat(
+            hour_label=current_hour.strftime("%I %p"), # Formats as "01 PM", "08 AM"
+            defect_count=count
+        ))
+
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "trend": trend
+    }
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)

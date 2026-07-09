@@ -91,29 +91,8 @@ class PaginatedInspectionResponse(BaseModel):
     meta: PaginationMeta
     
 # ==========================================
-# Dashboard & Charts Schema
+# Analytics Schema
 # ==========================================
-
-# Schema for Line/Area Charts (e.g., InfluxDB Telemetry Data)
-class TimeSeriesDataPoint(BaseModel):
-    time: datetime
-    value: float
-
-class SensorChartResponse(BaseModel):
-    sensor_id: str
-    sensor_type: str
-    unit: Optional[str] = None
-    data_points: list[TimeSeriesDataPoint]
-
-# Schema for Pie/Bar Charts (e.g., PostgreSQL Inspection Aggregations)
-class DefectStat(BaseModel):
-    category: str  
-    count: int
-
-class InspectionChartResponse(BaseModel):
-    timeframe_hours: int
-    total_inspections: int
-    stats: list[DefectStat]
     
 class AIConfidenceStat(BaseModel):
     category: str
@@ -122,4 +101,12 @@ class AIConfidenceStat(BaseModel):
 
 class AIConfidenceResponse(BaseModel):
     timeframe_days: int
-    stats: list[AIConfidenceStat]    
+    stats: list[AIConfidenceStat]
+    
+class HourlyDefectStat(BaseModel):
+    hour_label: str
+    defect_count: int
+
+class HourlyDefectResponse(BaseModel):
+    date: str
+    trend: list[HourlyDefectStat]    
