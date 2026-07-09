@@ -518,12 +518,15 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
         # Search through current reading data and PLC status
         for reading in telemetry_data:
             # Search for current reading
-            if "current" in reading:
-                current_value = float(reading["current"])
-                last_current_timestamp = reading.get("timestamp")
+            if reading.get("sensor_id") == "Curr_01" and "current" in reading and reading["current"] is not None:
+                try:
+                    current_value = float(reading["current"])
+                    last_current_timestamp = reading.get("timestamp")
+                except (TypeError, ValueError):
+                    current_value = 0.0
             
             # Search for PLC status
-            if reading.get("sensor_id") == "PLC" and "plc_status" in reading:
+            if reading.get("sensor_id") == "PLC" and "plc_status" in reading and reading["plc_status"] is not None:
                 plc_status = reading.get("plc_status")
 
         if not last_current_timestamp:
@@ -704,12 +707,15 @@ def get_speed_status(current_session: models.SystemSession = Depends(get_current
         # Dual-Lookup: Extract actual speed and PLC registered speed independently
         for reading in telemetry_data:
             # Assumes the physical speed sensor ID is 'Speed_01' and sends data as 'speed'
-            if reading.get("sensor_id") == "Speed_01" and "speed_ms" in reading:
-                actual_speed = float(reading["speed_ms"])
-                last_speed_timestamp = reading.get("timestamp")
-            
+            if reading.get("sensor_id") == "Speed_01" and "speed_ms" in reading and reading["speed_ms"] is not None:
+                try:
+                    actual_speed = float(reading["speed_ms"])
+                    last_speed_timestamp = reading.get("timestamp")
+                except (TypeError, ValueError):
+                    actual_speed = 0.0
+
             # Extract the 8-bit speed value from the independent PLC record
-            if reading.get("sensor_id") == "PLC" and "speed_register" in reading:
+            if reading.get("sensor_id") == "PLC" and "speed_register" in reading and reading["speed_register"] is not None:
                 plc_speed_raw = int(reading["speed_register"])
 
         if not last_speed_timestamp:
