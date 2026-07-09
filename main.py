@@ -1142,7 +1142,7 @@ def get_inspections(
 ):
     """
     Fetch inspections. Supports optional filtering by session_id.
-    If no session_id is provided, it returns the latest 600 inspections for performance safety.
+    If no session_id is provided, it returns all inspections.
     """
     query = db.query(models.Inspection)
 
@@ -1159,8 +1159,8 @@ def get_inspections(
             models.Inspection.inspected_at <= target_session.expires_at
         ).all()
 
-    # If no session ID is provided, return the latest 600 inspections
-    return query.order_by(models.Inspection.inspected_at.desc()).limit(600).all()
+    # If no session ID is provided, return all inspections
+    return query.order_by(models.Inspection.inspected_at.desc()).all()
 
 # ==========================================
 # Sensors Configuration Endpoints
