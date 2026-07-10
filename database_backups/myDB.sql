@@ -33,7 +33,7 @@ CREATE TABLE Sensors (
 
 CREATE TABLE Inspections (
     inspection_id SERIAL PRIMARY KEY,
-    user_id INT NOT NULL REFERENCES Users(user_id) ON DELETE RESTRICT,
+    user_id INT REFERENCES Users(user_id) ON DELETE RESTRICT,
     sensor_id VARCHAR(100) REFERENCES Sensors(sensor_id) ON DELETE RESTRICT,
     status inspection_status NOT NULL,
     defect_type VARCHAR(255),
