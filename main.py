@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone, date
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect, Query, status, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, cast, String
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -1262,14 +1262,14 @@ def get_ai_model_confidence(
     # Query that aggregates and calculates in a single database step
     results = db.query(
         # If defected, get defect_type; if Good or Invalid, get the base status
-        func.coalesce(models.Inspection.defect_type, models.Inspection.status).alias("category"),
-        func.avg(models.Inspection.confidence_score).alias("avg_confidence"),
-        func.count(models.Inspection.inspection_id).alias("count")
+        func.coalesce(models.Inspection.defect_type, cast(models.Inspection.status, String)).label("category"),
+        func.avg(models.Inspection.confidence_score).label("avg_confidence"),
+        func.count(models.Inspection.inspection_id).label("count")
     ).filter(
         models.Inspection.inspected_at >= time_threshold,
         # Ignore any inspection record that lacks a confidence score
         models.Inspection.confidence_score.isnot(None)
-    ).group_by(func.coalesce(models.Inspection.defect_type, models.Inspection.status)).all()
+    ).group_by(func.coalesce(models.Inspection.defect_type, cast(models.Inspection.status, String))).all()
     
     # Format the data for the frontend response
     stats = []
@@ -1307,11 +1307,11 @@ def get_hourly_defect_trend(
 
     # Query PostgreSQL to group defected items by hour
     results = db.query(
-        func.date_trunc('hour', models.Inspection.inspected_at).alias("hour_bucket"),
-        func.count(models.Inspection.inspection_id).alias("count")
+        func.date_trunc('hour', models.Inspection.inspected_at).label("hour_bucket"),
+        func.count(models.Inspection.inspection_id).label("count")
     ).filter(
         models.Inspection.inspected_at > cutoff,
-        models.Inspection.status == schemas.InspectionStatus.Defected
+        models.Inspection.status == "Defected"
     ).group_by(func.date_trunc('hour', models.Inspection.inspected_at)).all()
 
     # Convert database results into a dictionary for O(1) lookups {datetime: count}
