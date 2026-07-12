@@ -58,9 +58,15 @@ def move_cloudinary_asset(image_url, new_category):
         if not old_public_id:
             return None
 
-        # Extract the filename and prepare the new path
+        # Extract the filename
         filename = old_public_id.split('/')[-1]
-        new_folder_path = f"Nexus_System/Confirmed/{new_category}"
+        
+        # Determine the new folder path based on the category
+        if new_category == "Invalid":
+            new_folder_path = "Nexus_System/Invalid"
+        else:
+            new_folder_path = f"Nexus_System/Confirmed/{new_category}"
+            
         new_public_id = f"{new_folder_path}/{filename}"
         
         # Change the image's URL (Public ID)

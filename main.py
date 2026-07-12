@@ -817,8 +817,8 @@ async def create_automated_inspection(
     if image_file:
         image_bytes = await image_file.read()
 
-    if (status == schemas.InspectionStatus.Good and defect_type is not None):
-        raise HTTPException(status_code=400, detail="A Good inspection cannot have a defect type.")
+    if (status in [schemas.InspectionStatus.Good, schemas.InspectionStatus.Invalid] and defect_type is not None):
+        raise HTTPException(status_code=400, detail="A Good or Invalid inspection cannot have a defect type.")
 
     if (status == schemas.InspectionStatus.Defected and not defect_type):
         raise HTTPException(status_code=400, detail="Defect type is required when status is Defected.")
