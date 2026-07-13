@@ -1070,16 +1070,22 @@ async def websocket_telemetry(
     """
     Live WebSocket stream, secured by Session ID via Query Parameter.
     """
-    # Check if the session is valid before accepting the connection
-    session = db.query(models.SystemSession).filter(
-        models.SystemSession.session_id == session_id,
-        models.SystemSession.expires_at > datetime.now(timezone.utc)
-    ).first()
+    try:
+        # Check if the session is valid before accepting the connection
+        session = db.query(models.SystemSession).filter(
+            models.SystemSession.session_id == session_id,
+            models.SystemSession.expires_at > datetime.now(timezone.utc)
+        ).first()
     
-    if not session:
-        # If the session is invalid, reject the connection immediately with a policy violation code
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+        if not session:
+            # If the session is invalid, reject the connection immediately with a policy violation code
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        
+        user_id = session.user_id    # Store the user_id for logging
+    finally:
+        # Close the DB connection early so it returns to the pool
+        db.close()
 
     # If the session is valid, accept the connection
     await websocket.accept()
