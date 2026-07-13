@@ -541,6 +541,10 @@ def get_motor_status(current_session: models.SystemSession = Depends(get_current
 
         # Calculate the age of the last current reading to determine if the system is online
         reading_time = datetime.fromisoformat(last_current_timestamp.replace("Z", "+00:00"))
+        
+        if reading_time.tzinfo is None:
+            reading_time = reading_time.replace(tzinfo=timezone.utc)
+            
         now = datetime.now(timezone.utc)
         seconds_since_last_reading = (now - reading_time).total_seconds()
 
