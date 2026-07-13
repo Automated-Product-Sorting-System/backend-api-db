@@ -83,18 +83,26 @@ def get_telemetry_for_day(date_str: str):
     current_rows = current_table.to_pylist()
     plc_rows = plc_table.to_pylist()
 
-    if not current_rows:
+    # Case 1: Neither PLC nor Current sensor are sending data
+    if not current_rows and not plc_rows:
         return []
+
+    # Case 2: Current sensor is not sending data but PLC is
+    if not current_rows and plc_rows:
+        plc_df = pl.DataFrame(plc_rows).sort("time")
+        # Add a column for current with null values
+        return plc_df.with_columns(pl.lit(None).alias("current")).to_dicts()
 
     current_df = pl.DataFrame(current_rows).sort("time")
 
+    # Case 3: Current sensor is sending data but PLC is not
     if not plc_rows:
-        # No PLC status recorded that day; still return current readings
         return current_df.with_columns(pl.lit(None).alias("plc_status")).to_dicts()
 
+    # Case 4: Both PLC and Current sensor are sending data
     plc_df = pl.DataFrame(plc_rows).sort("time")
-
-    # As-of backward join: for each 'current' timestamp, attach the last known 'plc_status' at or before that moment
+    
+    # Merge the data
     merged_df = current_df.join_asof(plc_df, on="time", strategy="backward")
 
     return merged_df.to_dicts()
