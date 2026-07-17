@@ -78,18 +78,6 @@ class InspectionResponse(InspectionBase):
     inspected_at: datetime
     model_config = ConfigDict(from_attributes=True)
     
-class PaginationMeta(BaseModel):
-    current_page: int
-    page_size: int
-    total_count: int
-    total_pages: int
-    has_next: bool
-    has_previous: bool
-
-class PaginatedInspectionResponse(BaseModel):
-    data: list[InspectionResponse]
-    meta: PaginationMeta
-    
 # ==========================================
 # Analytics Schema
 # ==========================================

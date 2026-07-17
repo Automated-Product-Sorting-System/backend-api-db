@@ -950,10 +950,8 @@ def edit_inspection(
         "image_url": inspection.cv_image_url
     }
 
-@app.get("/inspections/pending-review", response_model=schemas.PaginatedInspectionResponse)
+@app.get("/inspections/pending-review", response_model=list[schemas.InspectionResponse])
 def get_pending_inspections(
-    page: int = Query(1, ge=1, description="Current page number"),
-    size: int = Query(9, ge=1, le=100, description="Number of images per page"),
     current_session: models.SystemSession = Depends(get_current_session),
     db: Session = Depends(get_db)):
     """
@@ -971,39 +969,20 @@ def get_pending_inspections(
         models.Inspection.user_id.is_(None)
     )
     
-    # Calculate total image count and pages
-    total_count = base_query.count()
-    total_pages = math.ceil(total_count / size) if total_count > 0 else 1
-    
-    # Calculate the offset for the current page
-    skip = (page - 1) * size
-    
-    # Fetch data for the current page only (ordered by oldest first)
+    # Fetch all data (ordered by oldest first) without offset/limit
     pending_reviews = base_query.order_by(
         models.Inspection.inspected_at.asc()
-    ).offset(skip).limit(size).all()
+    ).all()
     
-    # Return the paginated results
-    return {
-        "data": pending_reviews,
-        "meta": {
-            "current_page": page,
-            "page_size": size,
-            "total_count": total_count,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_previous": page > 1
-        }
-    }
-    
-@app.get("/inspections/reviewed", response_model=schemas.PaginatedInspectionResponse)
+    # Return the raw list
+    return pending_reviews
+
+
+@app.get("/inspections/reviewed", response_model=list[schemas.InspectionResponse])
 def get_reviewed_inspections(
-    page: int = Query(1, ge=1, description="Current page number"),
-    size: int = Query(9, ge=1, le=100, description="Number of images per page"),
     status_filter: Optional[schemas.InspectionStatus] = Query(None, description="Filter by status (Good, Defected, Invalid)"),
     current_session: models.SystemSession = Depends(get_current_session),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """
     Returns a list of inspections that have ALREADY been reviewed.
     """
@@ -1023,31 +1002,16 @@ def get_reviewed_inspections(
         models.Inspection.inspected_at >= time_threshold
     )
     
-    # 
     if status_filter:
         base_query = base_query.filter(models.Inspection.status == status_filter)
     
-    # Calculate total image count and pages
-    total_count = base_query.count()
-    total_pages = math.ceil(total_count / size) if total_count > 0 else 1
-    skip = (page - 1) * size
-    
-    # Fetch data for the current page only (ordered by newest first)
+    # Fetch all data (ordered by newest first) without offset/limit
     reviewed_inspections = base_query.order_by(
         models.Inspection.inspected_at.desc()
-    ).offset(skip).limit(size).all()
+    ).all()
     
-    return {
-        "data": reviewed_inspections,
-        "meta": {
-            "current_page": page,
-            "page_size": size,
-            "total_count": total_count,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_previous": page > 1
-        }
-    }
+    # Return the raw list
+    return reviewed_inspections
 
 # ==========================================
 # Telemetry (InfluxDB) Endpoints
